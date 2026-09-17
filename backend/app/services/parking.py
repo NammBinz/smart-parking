@@ -44,7 +44,14 @@ def calculate_fee(entry_time: datetime, settings: Setting, now: datetime | None 
     )
 
 
-def check_in(db: Session, plate_number: str, slot_id: int) -> tuple[ParkingSession, ParkingSlot]:
+def check_in(
+    db: Session,
+    plate_number: str,
+    slot_id: int,
+    entry_image: str | None = None,
+    entry_detection_confidence: float | None = None,
+    entry_ocr_confidence: float | None = None,
+) -> tuple[ParkingSession, ParkingSlot]:
     try:
         normalized = normalize_plate(plate_number)
     except ValueError as exc:
@@ -64,6 +71,9 @@ def check_in(db: Session, plate_number: str, slot_id: int) -> tuple[ParkingSessi
         plate_number=normalized,
         slot_id=slot.id,
         entry_time=datetime.utcnow(),
+        entry_image=entry_image,
+        entry_detection_confidence=entry_detection_confidence,
+        entry_ocr_confidence=entry_ocr_confidence,
         status="PARKING",
     )
     slot.status = "OCCUPIED"

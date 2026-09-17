@@ -6,6 +6,9 @@ from pydantic import BaseModel, Field
 class CheckInRequest(BaseModel):
     plate_number: str = Field(min_length=1, max_length=30)
     slot_id: int = Field(gt=0)
+    entry_image: str | None = Field(default=None, max_length=500)
+    entry_detection_confidence: float | None = Field(default=None, ge=0, le=1)
+    entry_ocr_confidence: float | None = Field(default=None, ge=0, le=1)
 
 
 class CheckoutPreviewRequest(BaseModel):

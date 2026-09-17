@@ -1,4 +1,3 @@
-import os
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -6,7 +5,6 @@ from pathlib import Path
 TEST_DB = Path(__file__).parent / "test_parking.db"
 if TEST_DB.exists():
     TEST_DB.unlink()
-os.environ["DATABASE_URL"] = f"sqlite:///{TEST_DB.as_posix()}"
 
 from fastapi.testclient import TestClient  # noqa: E402
 from sqlalchemy import func, select  # noqa: E402

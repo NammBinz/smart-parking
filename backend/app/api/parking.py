@@ -18,7 +18,14 @@ router = APIRouter(prefix="/parking", tags=["parking"])
 
 @router.post("/check-in", response_model=CheckInResponse, status_code=status.HTTP_201_CREATED)
 def check_in(data: CheckInRequest, db: Session = Depends(get_db)):
-    parking_session, slot = parking_service.check_in(db, data.plate_number, data.slot_id)
+    parking_session, slot = parking_service.check_in(
+        db,
+        data.plate_number,
+        data.slot_id,
+        entry_image=data.entry_image,
+        entry_detection_confidence=data.entry_detection_confidence,
+        entry_ocr_confidence=data.entry_ocr_confidence,
+    )
     return CheckInResponse(
         message="Vehicle checked in successfully",
         session_id=parking_session.id,
