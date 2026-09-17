@@ -90,6 +90,14 @@ python scripts/test_recognition.py path/to/car.jpg
 
 The script prints every detection, bounding box, YOLO confidence, raw and normalized OCR text, OCR confidence, validation status, and preprocessing variant. It does not check a vehicle in.
 
+For exhaustive OCR diagnostics, including every padding/variant candidate, fragment geometry, candidate timing, split-row status, and intermediate images under `backend/debug_output/`, run:
+
+```powershell
+python scripts/test_recognition.py path/to/car.jpg --debug
+```
+
+Normal inference uses a bounded candidate plan for CPU performance. Debug mode evaluates all seven preprocessing variants at 5%, 10%, and 15% padding. EasyOCR uses beam search with a beam width of three as a modest accuracy improvement without the much larger cost of an unrestricted search.
+
 ## Frontend installation
 
 In a second terminal:

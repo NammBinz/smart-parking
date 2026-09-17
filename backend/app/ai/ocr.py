@@ -12,9 +12,19 @@ _ocr_inference_lock = threading.Lock()
 
 
 @dataclass(frozen=True)
+class OCRFragment:
+    text: str
+    confidence: float
+    bbox: tuple[tuple[float, float], ...]
+    center: tuple[float, float]
+    source_region: str
+
+
+@dataclass(frozen=True)
 class OCRResult:
     raw_text: str
     confidence: float
+    fragments: tuple[OCRFragment, ...] = ()
 
 
 def _fragment_geometry(fragment) -> tuple[float, float, float]:
@@ -58,7 +68,7 @@ def sort_fragments_spatially(fragments: list) -> list:
     return ordered
 
 
-def run_ocr(image: np.ndarray) -> OCRResult:
+def run_ocr(image: np.ndarray, source_region: str = "full") -> OCRResult:
     reader = get_ocr_reader()
     with _ocr_inference_lock:
         fragments = reader.readtext(
@@ -66,6 +76,8 @@ def run_ocr(image: np.ndarray) -> OCRResult:
             detail=1,
             paragraph=False,
             allowlist=ALLOWLIST,
+            decoder="beamsearch",
+            beamWidth=3,
         )
     if not fragments:
         return OCRResult(raw_text="", confidence=0.0)
@@ -74,10 +86,43 @@ def run_ocr(image: np.ndarray) -> OCRResult:
     raw_text = "".join(str(fragment[1]).strip() for fragment in ordered)
     weighted_total = 0.0
     total_length = 0
-    for _, text, confidence in ordered:
+    debug_fragments = []
+    for bbox, text, confidence in ordered:
         text_length = len(str(text).strip())
         if text_length:
             weighted_total += float(confidence) * text_length
             total_length += text_length
+        points = tuple((float(point[0]), float(point[1])) for point in bbox)
+        center_x, center_y, _ = _fragment_geometry((bbox, text, confidence))
+        debug_fragments.append(
+            OCRFragment(
+                text=str(text),
+                confidence=max(0.0, min(1.0, float(confidence))),
+                bbox=points,
+                center=(center_x, center_y),
+                source_region=source_region,
+            )
+        )
     aggregate = weighted_total / total_length if total_length else 0.0
-    return OCRResult(raw_text=raw_text, confidence=max(0.0, min(1.0, aggregate)))
+    return OCRResult(
+        raw_text=raw_text,
+        confidence=max(0.0, min(1.0, aggregate)),
+        fragments=tuple(debug_fragments),
+    )
+
+
+def combine_ocr_results(top: OCRResult, bottom: OCRResult) -> OCRResult:
+    raw_text = f"{top.raw_text}{bottom.raw_text}"
+    top_length = len(top.raw_text.strip())
+    bottom_length = len(bottom.raw_text.strip())
+    total_length = top_length + bottom_length
+    confidence = (
+        ((top.confidence * top_length) + (bottom.confidence * bottom_length)) / total_length
+        if total_length
+        else 0.0
+    )
+    return OCRResult(
+        raw_text=raw_text,
+        confidence=max(0.0, min(1.0, confidence)),
+        fragments=top.fragments + bottom.fragments,
+    )

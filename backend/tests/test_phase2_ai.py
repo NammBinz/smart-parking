@@ -5,13 +5,18 @@ import numpy as np
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
-from app.ai.ocr import sort_fragments_spatially
+from app.ai import pipeline as pipeline_module
+from app.ai import ocr as ocr_module
+from app.ai.detector import Detection
+from app.ai.ocr import OCRResult, run_ocr, sort_fragments_spatially
+from app.ai.pipeline import Candidate, analyze_license_plates, select_best_candidate
 from app.ai.preprocess import crop_with_padding, preprocessing_variants
-from app.ai.validator import validate_plate_candidate
+from app.ai.validator import plate_structure_score, validate_plate_candidate
 from app.api import ai as ai_api
 from app.database import SessionLocal
 from app.main import app
 from app.models import ParkingSession
+from scripts import test_recognition as recognition_script
 
 
 TEST_DB = Path(__file__).parent / "test_parking.db"
@@ -177,6 +182,9 @@ def test_preprocessing_validation_and_two_line_ordering():
         "grayscale",
         "contrast_enhanced",
         "adaptive_threshold",
+        "otsu",
+        "bilateral_otsu",
+        "sharpened_grayscale",
     }
 
     fragments = [
@@ -190,6 +198,112 @@ def test_preprocessing_validation_and_two_line_ordering():
     assert validate_plate_candidate("29-A1 179.38").normalized_text == "29A117938"
     assert validate_plate_candidate("29-A1 179.38").is_valid is True
     assert validate_plate_candidate("BAD").is_valid is False
+
+
+def test_multiple_padding_and_two_line_split_candidates(monkeypatch, tmp_path, capsys):
+    image = np.zeros((100, 100, 3), dtype=np.uint8)
+    detection = Detection(
+        class_id=1,
+        class_name="1",
+        confidence=0.93,
+        bbox=(20, 20, 80, 80),
+    )
+    monkeypatch.setattr(pipeline_module, "detect_plates", lambda _image, _confidence: [detection])
+
+    def mocked_ocr(_image, source_region="full"):
+        if source_region == "top":
+            return OCRResult(raw_text="59F1", confidence=0.85)
+        if source_region == "bottom":
+            return OCRResult(raw_text="18461", confidence=0.88)
+        return OCRResult(raw_text="292160344", confidence=0.95)
+
+    monkeypatch.setattr(pipeline_module, "run_ocr", mocked_ocr)
+    analysis = analyze_license_plates(image, 0.25)[0]
+    assert analysis.debug_images == {}
+    identities = {candidate.preprocessing_variant for candidate in analysis.candidates}
+    assert any(identity.startswith("padding05_") for identity in identities)
+    assert any(identity.startswith("padding10_") for identity in identities)
+    assert any(identity.startswith("padding15_") for identity in identities)
+    assert "padding10_split_rows_otsu" in identities
+    assert analysis.split_row_used is True
+    assert analysis.winner.strategy == "split_rows"
+    assert analysis.winner.normalized_text == "59F118461"
+    assert any(candidate.raw_text == "292160344" for candidate in analysis.candidates)
+
+    exhaustive = analyze_license_plates(image, 0.25, exhaustive=True, capture_images=True)[0]
+    assert len(exhaustive.candidates) == 42
+    assert "padding05_otsu" in {
+        candidate.preprocessing_variant for candidate in exhaustive.candidates
+    }
+    assert "padding15_split_rows_sharpened_grayscale" in {
+        candidate.preprocessing_variant for candidate in exhaustive.candidates
+    }
+    assert "padding10_crop" in exhaustive.debug_images
+    monkeypatch.setattr(recognition_script, "DEBUG_OUTPUT_DIR", tmp_path)
+    recognition_script._print_debug_analysis(1, exhaustive)
+    output = capsys.readouterr().out
+    assert "OCR candidates:" in output
+    assert "raw: 292160344" in output
+    assert "Winning strategy: split_rows" in output
+    assert "Detection OCR execution time:" in output
+    assert (tmp_path / "detection_1_crop.jpg").is_file()
+    assert (tmp_path / "detection_1_padding10_otsu.jpg").is_file()
+
+
+def test_candidate_ranking_uses_validation_confidence_and_structure():
+    invalid_high_confidence = Candidate(
+        raw_text="292160344",
+        normalized_text="292160344",
+        ocr_confidence=0.99,
+        preprocessing_variant="padding05_contrast_enhanced",
+        is_valid=False,
+        structure_score=plate_structure_score("292160344"),
+        strategy="full",
+        padding_ratio=0.05,
+    )
+    plausible = Candidate(
+        raw_text="29F112345",
+        normalized_text="29F112345",
+        ocr_confidence=0.82,
+        preprocessing_variant="padding10_otsu",
+        is_valid=True,
+        structure_score=plate_structure_score("29F112345"),
+        strategy="full",
+        padding_ratio=0.10,
+    )
+    less_structured = Candidate(
+        raw_text="ABC12345",
+        normalized_text="ABC12345",
+        ocr_confidence=0.83,
+        preprocessing_variant="padding10_grayscale",
+        is_valid=True,
+        structure_score=plate_structure_score("ABC12345"),
+        strategy="full",
+        padding_ratio=0.10,
+    )
+    assert select_best_candidate([invalid_high_confidence, plausible]) == plausible
+    assert select_best_candidate([less_structured, plausible]) == plausible
+    all_digit = validate_plate_candidate("292160344")
+    assert all_digit.normalized_text == "292160344"
+    assert all_digit.is_valid is False
+
+
+def test_ocr_debug_fragments_and_balanced_beam_search(monkeypatch):
+    class FakeReader:
+        def readtext(self, _image, **kwargs):
+            assert kwargs["decoder"] == "beamsearch"
+            assert kwargs["beamWidth"] == 3
+            return [
+                ([[0, 0], [20, 0], [20, 10], [0, 10]], "29F1", 0.8),
+                ([[22, 0], [42, 0], [42, 10], [22, 10]], "12345", 0.9),
+            ]
+
+    monkeypatch.setattr(ocr_module, "get_ocr_reader", lambda: FakeReader())
+    result = run_ocr(np.zeros((20, 50), dtype=np.uint8), source_region="top")
+    assert result.raw_text == "29F112345"
+    assert len(result.fragments) == 2
+    assert result.fragments[0].source_region == "top"
+    assert result.fragments[0].center == (10.0, 5.0)
 
 
 def teardown_module():

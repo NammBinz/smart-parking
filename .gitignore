@@ -13,6 +13,7 @@ dist/
 # Runtime uploads (keep the directory placeholder)
 backend/uploads/*
 !backend/uploads/.gitkeep
+backend/debug_output/
 
 # Runtime databases (keep the directory placeholder)
 backend/data/*.db

@@ -2,6 +2,19 @@ import cv2
 import numpy as np
 
 
+def crop_to_bbox(
+    image: np.ndarray,
+    bbox: tuple[int, int, int, int],
+) -> np.ndarray:
+    image_height, image_width = image.shape[:2]
+    x1, y1, x2, y2 = bbox
+    x1 = max(0, min(image_width, x1))
+    y1 = max(0, min(image_height, y1))
+    x2 = max(0, min(image_width, x2))
+    y2 = max(0, min(image_height, y2))
+    return image[y1:y2, x1:x2].copy()
+
+
 def crop_with_padding(
     image: np.ndarray,
     bbox: tuple[int, int, int, int],
@@ -33,9 +46,37 @@ def preprocessing_variants(crop: np.ndarray) -> dict[str, np.ndarray]:
         13,
         5,
     )
+    _, otsu = cv2.threshold(
+        grayscale,
+        0,
+        255,
+        cv2.THRESH_BINARY + cv2.THRESH_OTSU,
+    )
+    bilateral = cv2.bilateralFilter(grayscale, 7, 50, 50)
+    _, bilateral_otsu = cv2.threshold(
+        bilateral,
+        0,
+        255,
+        cv2.THRESH_BINARY + cv2.THRESH_OTSU,
+    )
+    sharpened = cv2.filter2D(
+        grayscale,
+        -1,
+        np.array([[0, -1, 0], [-1, 5, -1], [0, -1, 0]], dtype=np.float32),
+    )
     return {
         "upscaled_color": upscaled,
         "grayscale": grayscale,
         "contrast_enhanced": contrast,
         "adaptive_threshold": adaptive,
+        "otsu": otsu,
+        "bilateral_otsu": bilateral_otsu,
+        "sharpened_grayscale": sharpened,
     }
+
+
+def split_two_line_crop(crop: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    height = crop.shape[0]
+    top_end = max(1, min(height, int(round(height * 0.55))))
+    bottom_start = max(0, min(height - 1, int(round(height * 0.45))))
+    return crop[:top_end].copy(), crop[bottom_start:].copy()
