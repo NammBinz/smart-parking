@@ -2,7 +2,6 @@ import axios from 'axios'
 
 const api = axios.create({
   baseURL: 'http://127.0.0.1:8000',
-  headers: { 'Content-Type': 'application/json' },
   timeout: 10000,
 })
 
@@ -15,6 +14,14 @@ export const checkout = (payload) => api.post('/api/parking/checkout', payload).
 export const getHistory = (params = {}) => api.get('/api/history', { params }).then(({ data }) => data)
 export const getSettings = () => api.get('/api/settings').then(({ data }) => data)
 export const updateSettings = (payload) => api.patch('/api/settings', payload).then(({ data }) => data)
+export const getAiStatus = () => api.get('/api/ai/status').then(({ data }) => data)
+export const recognizeImage = (file) => {
+  const formData = new FormData()
+  formData.append('file', file)
+  return api
+    .post('/api/ai/recognize-image', formData, { timeout: 120000 })
+    .then(({ data }) => data)
+}
 
 export function errorMessage(error) {
   return error.response?.data?.detail || error.message || 'Something went wrong.'

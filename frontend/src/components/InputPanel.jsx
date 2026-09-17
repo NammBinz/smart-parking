@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { normalizePlate } from '../utils/format'
+import UploadRecognition from './UploadRecognition'
 
 const tabs = [
   ['camera', 'Camera'],
@@ -7,18 +8,16 @@ const tabs = [
   ['manual', 'Manual Input'],
 ]
 
-export default function InputPanel({ plate, onPlateChange, onClear }) {
+export default function InputPanel({
+  plate,
+  plateSource,
+  onPlateChange,
+  onAiPlate,
+  onResetAiSelection,
+  onClear,
+  recognitionResetKey,
+}) {
   const [activeTab, setActiveTab] = useState('manual')
-  const [previewUrl, setPreviewUrl] = useState('')
-
-  useEffect(() => () => previewUrl && URL.revokeObjectURL(previewUrl), [previewUrl])
-
-  const selectImage = (event) => {
-    const file = event.target.files?.[0]
-    if (!file) return
-    if (previewUrl) URL.revokeObjectURL(previewUrl)
-    setPreviewUrl(URL.createObjectURL(file))
-  }
 
   return (
     <section className="panel input-panel">
@@ -27,7 +26,7 @@ export default function InputPanel({ plate, onPlateChange, onClear }) {
           <p className="eyebrow">Vehicle input</p>
           <h2>Identify vehicle</h2>
         </div>
-        <span className="phase-badge">Phase 1</span>
+        <span className="phase-badge">Phase 2</span>
       </div>
       <div className="tab-list" role="tablist">
         {tabs.map(([key, label]) => (
@@ -47,25 +46,18 @@ export default function InputPanel({ plate, onPlateChange, onClear }) {
         {activeTab === 'camera' && (
           <div className="placeholder-state">
             <div className="placeholder-icon">◎</div>
-            <p>Camera integration will be implemented in Phase 2.</p>
+            <p>Live camera integration will be implemented in Phase 3.</p>
           </div>
         )}
         {activeTab === 'upload' && (
-          <div>
-            <label className="form-label fw-semibold" htmlFor="vehicle-image">Select vehicle image</label>
-            <input
-              className="form-control"
-              id="vehicle-image"
-              type="file"
-              accept=".jpg,.jpeg,.png,image/jpeg,image/png"
-              onChange={selectImage}
-            />
-            {previewUrl ? (
-              <img className="upload-preview" src={previewUrl} alt="Selected vehicle" />
-            ) : (
-              <p className="helper-text mt-3">JPG, JPEG, and PNG files are supported. AI processing arrives in Phase 2.</p>
-            )}
-          </div>
+          <UploadRecognition
+            resetKey={recognitionResetKey}
+            onResetSelection={onResetAiSelection}
+            onSelectPlate={(detection, imagePath) => {
+              onAiPlate(detection, imagePath)
+              if (!detection.is_valid) setActiveTab('manual')
+            }}
+          />
         )}
         {activeTab === 'manual' && (
           <div>
@@ -81,6 +73,7 @@ export default function InputPanel({ plate, onPlateChange, onClear }) {
             <div className="detected-plate">
               <span>Detected / Entered Plate</span>
               <strong>{plate || '—'}</strong>
+              {plateSource && <small>{plateSource}</small>}
             </div>
             <button className="btn btn-sm btn-outline-secondary mt-3" onClick={onClear} disabled={!plate}>
               Clear plate

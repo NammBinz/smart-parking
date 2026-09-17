@@ -50,6 +50,24 @@ main { width: min(1500px, calc(100% - 48px)); margin: 0 auto; padding: 28px 0 48
 .detected-plate { margin-top: 20px; border-radius: 10px; background: #edf5f2; border: 1px solid #d7eae3; padding: 18px; }
 .detected-plate span { display: block; color: #647972; font-size: .75rem; font-weight: 700; text-transform: uppercase; }
 .detected-plate strong { display: block; margin-top: 5px; font-size: 1.6rem; letter-spacing: .1em; color: #1d5945; }
+.detected-plate small { display: block; margin-top: 6px; color: #52786b; font-size: .74rem; font-weight: 700; }
+
+.detection-image-wrap { position: relative; width: 100%; margin-top: 18px; }
+.detection-image-wrap .upload-preview { width: 100%; height: auto; max-height: none; margin-top: 0; object-fit: initial; }
+.detection-box { position: absolute; border: 2px solid #f0b429; background: rgba(240,180,41,.1); padding: 0; cursor: pointer; }
+.detection-box:hover, .detection-box.selected { border-color: #37d78f; background: rgba(55,215,143,.16); box-shadow: 0 0 0 2px rgba(55,215,143,.22); }
+.detection-box span { position: absolute; left: -2px; bottom: 100%; max-width: 180px; padding: 3px 6px; background: #122d3c; color: white; font-size: .65rem; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.recognition-results { display: grid; gap: 10px; margin-top: 14px; }
+.recognition-card { padding: 14px; border: 1px solid #dfe6e9; border-radius: 10px; background: #fafcfc; }
+.recognition-card.selected { border-color: #58aa82; box-shadow: inset 3px 0 #58aa82; background: #f2faf6; }
+.recognition-card-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+.recognition-card-heading strong { display: block; margin-top: 2px; color: #233d4d; font-size: 1.15rem; letter-spacing: .07em; }
+.result-label { color: #71808a; font-size: .68rem; font-weight: 800; text-transform: uppercase; }
+.validity-badge { flex: 0 0 auto; padding: 4px 7px; border-radius: 999px; font-size: .66rem; font-weight: 800; }
+.validity-badge.valid { color: #256c4e; background: #dff2e8; }
+.validity-badge.invalid { color: #8b5e1c; background: #fff0d5; }
+.recognition-metrics { display: flex; flex-wrap: wrap; gap: 7px 13px; margin: 11px 0; color: #6a7982; font-size: .72rem; }
+.recognition-metrics strong { color: #354a57; }
 
 .legend { display: flex; flex-wrap: wrap; gap: 12px; font-size: .75rem; color: #667681; }
 .legend span { display: inline-flex; align-items: center; gap: 5px; }

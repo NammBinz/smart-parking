@@ -33,6 +33,8 @@ export default function App() {
   const [slots, setSlots] = useState([])
   const [currency, setCurrency] = useState('VND')
   const [plate, setPlate] = useState('')
+  const [aiMetadata, setAiMetadata] = useState(null)
+  const [recognitionResetKey, setRecognitionResetKey] = useState(0)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [selectedSlot, setSelectedSlot] = useState(null)
@@ -64,12 +66,54 @@ export default function App() {
     if (slot.status === 'EMPTY' && plate) setCheckInSlot(slot)
   }
 
+  const handlePlateChange = (value) => {
+    setPlate(value)
+    if (aiMetadata && value !== aiMetadata.originalPlate) {
+      setAiMetadata({
+        ...aiMetadata,
+        entry_ocr_confidence: null,
+        manuallyCorrected: true,
+      })
+    }
+  }
+
+  const selectAiPlate = (detection, imagePath) => {
+    setPlate(detection.normalized_text)
+    setAiMetadata({
+      originalPlate: detection.normalized_text,
+      entry_image: imagePath,
+      entry_detection_confidence: detection.detection_confidence,
+      entry_ocr_confidence: detection.ocr_confidence,
+      manuallyCorrected: false,
+    })
+  }
+
+  const resetAiSelection = () => {
+    if (aiMetadata) setPlate('')
+    setAiMetadata(null)
+  }
+
+  const clearPlate = () => {
+    setPlate('')
+    setAiMetadata(null)
+  }
+
   const confirmCheckIn = async () => {
     setBusy(true)
     try {
-      await checkIn({ plate_number: plate, slot_id: checkInSlot.id })
+      const payload = { plate_number: plate, slot_id: checkInSlot.id }
+      if (aiMetadata?.entry_image) payload.entry_image = aiMetadata.entry_image
+      if (aiMetadata?.entry_detection_confidence != null) {
+        payload.entry_detection_confidence = aiMetadata.entry_detection_confidence
+      }
+      if (aiMetadata?.entry_ocr_confidence != null) {
+        payload.entry_ocr_confidence = aiMetadata.entry_ocr_confidence
+      }
+      await checkIn(payload)
       setCheckInSlot(null)
       setPlate('')
+      setAiMetadata(null)
+      setRecognitionResetKey((value) => value + 1)
       await refresh()
       notify(`Vehicle checked in to ${checkInSlot.code}.`)
     } catch (err) {
@@ -112,7 +156,15 @@ export default function App() {
       <main>
         <DashboardStats dashboard={dashboard} currency={currency} />
         <div className="content-layout">
-          <InputPanel plate={plate} onPlateChange={setPlate} onClear={() => setPlate('')} />
+          <InputPanel
+            plate={plate}
+            plateSource={aiMetadata ? (aiMetadata.manuallyCorrected ? 'AI image · manually corrected' : 'Recognized from uploaded image') : ''}
+            onPlateChange={handlePlateChange}
+            onAiPlate={selectAiPlate}
+            onResetAiSelection={resetAiSelection}
+            onClear={clearPlate}
+            recognitionResetKey={recognitionResetKey}
+          />
           <ParkingGrid slots={slots} plate={plate} onSlotClick={handleSlotClick} loading={loading} />
         </div>
       </main>
