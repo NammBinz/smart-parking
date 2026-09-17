@@ -18,6 +18,7 @@ class RecognitionDetection(BaseModel):
     ocr_confidence: float = Field(ge=0, le=1)
     preprocessing_variant: str
     is_valid: bool
+    ocr_status: str = "recognized"
 
 
 class RecognitionResponse(BaseModel):

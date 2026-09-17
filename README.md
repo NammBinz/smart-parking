@@ -79,7 +79,7 @@ POST /api/ai/recognize-image
 Content-Type: multipart/form-data
 ```
 
-The endpoint saves the original image under `backend/uploads/` using a UUID filename. It returns every YOLO detection, bounding boxes, class information, OCR text and confidence, selected preprocessing variant, validation status, and the best candidate index. A valid image with no detections returns HTTP 200 with an empty detection list.
+The endpoint saves the original image under `backend/uploads/` using a UUID filename. It returns every YOLO detection, bounding boxes, class information, OCR text and confidence, selected preprocessing variant, validation status, OCR status, and the best candidate index. A valid image with no detections returns HTTP 200 with an empty detection list. Detections smaller than the conservative 40×20 OCR threshold remain in the response with `ocr_status: "too_small"`, empty OCR text, and an invalid result so users can still enter the plate manually.
 
 To exercise the same production pipeline manually with a real image:
 
@@ -96,7 +96,7 @@ For exhaustive OCR diagnostics, including every padding/variant candidate, fragm
 python scripts/test_recognition.py path/to/car.jpg --debug
 ```
 
-Normal inference uses a bounded candidate plan for CPU performance. Debug mode evaluates all seven preprocessing variants at 5%, 10%, and 15% padding. EasyOCR uses beam search with a beam width of three as a modest accuracy improvement without the much larger cost of an unrestricted search.
+Normal two-line inference uses a progressive row-level ensemble. It starts with four targeted greedy OCR calls, reuses lazily computed preprocessing, and stops early when both rows have strong structural evidence. At most two targeted grayscale or beam-search fallbacks are added for weak rows. Top and bottom rows may come from different preprocessing variants or full-crop fragments, and conservative character alternatives require independent OCR evidence. Debug mode remains exhaustive, evaluating all seven preprocessing variants at 5%, 10%, and 15% padding with beam search for up to 63 OCR operations per suitable two-line detection.
 
 ## Frontend installation
 

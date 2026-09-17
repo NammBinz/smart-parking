@@ -8,8 +8,14 @@ from sqlalchemy import select
 from app.ai import pipeline as pipeline_module
 from app.ai import ocr as ocr_module
 from app.ai.detector import Detection
-from app.ai.ocr import OCRResult, run_ocr, sort_fragments_spatially
-from app.ai.pipeline import Candidate, analyze_license_plates, select_best_candidate
+from app.ai.ocr import OCRFragment, OCRResult, run_ocr, sort_fragments_spatially
+from app.ai.pipeline import (
+    Candidate,
+    RowCandidate,
+    analyze_license_plates,
+    fuse_row_candidates,
+    select_best_candidate,
+)
 from app.ai.preprocess import crop_with_padding, preprocessing_variants
 from app.ai.validator import plate_structure_score, validate_plate_candidate
 from app.api import ai as ai_api
@@ -210,7 +216,10 @@ def test_multiple_padding_and_two_line_split_candidates(monkeypatch, tmp_path, c
     )
     monkeypatch.setattr(pipeline_module, "detect_plates", lambda _image, _confidence: [detection])
 
-    def mocked_ocr(_image, source_region="full"):
+    decoder_calls = []
+
+    def mocked_ocr(_image, source_region="full", decoder="greedy"):
+        decoder_calls.append(decoder)
         if source_region == "top":
             return OCRResult(raw_text="59F1", confidence=0.85)
         if source_region == "bottom":
@@ -221,17 +230,34 @@ def test_multiple_padding_and_two_line_split_candidates(monkeypatch, tmp_path, c
     analysis = analyze_license_plates(image, 0.25)[0]
     assert analysis.debug_images == {}
     identities = {candidate.preprocessing_variant for candidate in analysis.candidates}
-    assert any(identity.startswith("padding05_") for identity in identities)
-    assert any(identity.startswith("padding10_") for identity in identities)
-    assert any(identity.startswith("padding15_") for identity in identities)
-    assert "padding10_split_rows_otsu" in identities
+    assert identities == {
+        "padding10_grayscale",
+        "padding10_otsu",
+        "row_fusion",
+    }
     assert analysis.split_row_used is True
-    assert analysis.winner.strategy == "split_rows"
+    assert analysis.row_fusion_used is True
+    assert analysis.winner.strategy == "row_fusion"
     assert analysis.winner.normalized_text == "59F118461"
     assert any(candidate.raw_text == "292160344" for candidate in analysis.candidates)
+    assert decoder_calls == ["greedy"] * 4
+    assert analysis.ocr_calls == 4
+    assert analysis.decoders_used == ("greedy",)
 
-    exhaustive = analyze_license_plates(image, 0.25, exhaustive=True, capture_images=True)[0]
-    assert len(exhaustive.candidates) == 42
+    progress = []
+    decoder_calls.clear()
+    exhaustive = analyze_license_plates(
+        image,
+        0.25,
+        exhaustive=True,
+        capture_images=True,
+        progress_callback=lambda current, total, label, elapsed: progress.append(
+            (current, total, label, elapsed)
+        ),
+    )[0]
+    assert len(exhaustive.candidates) == 43
+    assert progress[-1][0:2] == (63, 63)
+    assert decoder_calls == ["beamsearch"] * 63
     assert "padding05_otsu" in {
         candidate.preprocessing_variant for candidate in exhaustive.candidates
     }
@@ -244,7 +270,8 @@ def test_multiple_padding_and_two_line_split_candidates(monkeypatch, tmp_path, c
     output = capsys.readouterr().out
     assert "OCR candidates:" in output
     assert "raw: 292160344" in output
-    assert "Winning strategy: split_rows" in output
+    assert "Winning strategy: row_fusion" in output
+    assert "Best top row: 59F1" in output
     assert "Detection OCR execution time:" in output
     assert (tmp_path / "detection_1_crop.jpg").is_file()
     assert (tmp_path / "detection_1_padding10_otsu.jpg").is_file()
@@ -288,7 +315,7 @@ def test_candidate_ranking_uses_validation_confidence_and_structure():
     assert all_digit.is_valid is False
 
 
-def test_ocr_debug_fragments_and_balanced_beam_search(monkeypatch):
+def test_ocr_debug_fragments_and_decoder_selection(monkeypatch):
     class FakeReader:
         def readtext(self, _image, **kwargs):
             assert kwargs["decoder"] == "beamsearch"
@@ -299,11 +326,163 @@ def test_ocr_debug_fragments_and_balanced_beam_search(monkeypatch):
             ]
 
     monkeypatch.setattr(ocr_module, "get_ocr_reader", lambda: FakeReader())
-    result = run_ocr(np.zeros((20, 50), dtype=np.uint8), source_region="top")
+    result = run_ocr(
+        np.zeros((20, 50), dtype=np.uint8),
+        source_region="top",
+        decoder="beamsearch",
+    )
     assert result.raw_text == "29F112345"
     assert len(result.fragments) == 2
     assert result.fragments[0].source_region == "top"
     assert result.fragments[0].center == (10.0, 5.0)
+
+
+def test_ground_truth_row_ensemble_regression():
+    top_texts = ["2921", "29HZ1", "29Z1", "29Z1", "29Z1"]
+    bottom_texts = ["69344", "60244", "58344", "58144", "682L4"]
+    rows = []
+    for index, text in enumerate(top_texts):
+        rows.append(
+            RowCandidate(
+                row="top",
+                raw_text=text,
+                normalized_text=text,
+                confidence=0.82,
+                source=f"top_source_{index}",
+                preprocessing_variant=f"variant_{index}",
+                padding_label=f"padding{index}",
+            )
+        )
+    for index, text in enumerate(bottom_texts):
+        rows.append(
+            RowCandidate(
+                row="bottom",
+                raw_text=text,
+                normalized_text=text,
+                confidence=0.8034 if text == "58344" else 0.72,
+                source=f"bottom_source_{index}",
+                preprocessing_variant=f"variant_{index}",
+                padding_label=f"padding{index}",
+            )
+        )
+
+    top, bottom, fused = fuse_row_candidates(rows)
+    assert top.text == "29Z1"
+    assert bottom.text == "58344"
+    assert fused.normalized_text == "29Z158344"
+    assert fused.is_valid is True
+
+
+def test_full_crop_fragments_are_row_candidates():
+    result = OCRResult(
+        raw_text="2972158344",
+        confidence=0.80,
+        fragments=(
+            OCRFragment("29721", 0.75, (), (50.0, 20.0), "full"),
+            OCRFragment("58344", 0.8034, (), (50.0, 80.0), "full"),
+        ),
+    )
+    rows = pipeline_module._row_candidates_from_full_result(
+        result,
+        image_height=100,
+        source="padding10_otsu",
+        variant="otsu",
+        padding_label="padding10",
+    )
+    assert [(candidate.row, candidate.normalized_text) for candidate in rows] == [
+        ("top", "29721"),
+        ("bottom", "58344"),
+    ]
+
+
+def _rows(row, texts, confidence=0.82):
+    return [
+        RowCandidate(
+            row=row,
+            raw_text=text,
+            normalized_text=text,
+            confidence=confidence,
+            source=f"{row}_source_{index}",
+            preprocessing_variant=f"variant_{index}",
+            padding_label="padding10",
+        )
+        for index, text in enumerate(texts)
+    ]
+
+
+def test_overlapping_fragments_do_not_duplicate_bottom_text():
+    result = OCRResult(
+        raw_text="51A44032",
+        confidence=0.95,
+        fragments=(
+            OCRFragment("51A", 0.94, ((0, 10), (60, 10), (60, 35), (0, 35)), (30, 22), "full"),
+            OCRFragment("4", 0.96, ((0, 55), (20, 55), (20, 85), (0, 85)), (10, 70), "full"),
+            OCRFragment("4032", 0.95, ((0, 54), (80, 54), (80, 86), (0, 86)), (40, 70), "full"),
+        ),
+    )
+    rows = pipeline_module._row_candidates_from_full_result(
+        result, 100, "padding10_otsu", "otsu", "padding10"
+    )
+    top, bottom, fused = fuse_row_candidates(rows)
+    assert top.text == "51A"
+    assert bottom.text == "4032"
+    assert fused.normalized_text == "51A4032"
+    assert "44032" not in [candidate.normalized_text for candidate in rows]
+
+
+def test_supported_confusion_corrections_select_structured_rows():
+    rows = _rows("top", ["5953", "5953"])
+    rows += _rows("bottom", ["61L75", "61L75", "61475"], confidence=0.80)
+    top, bottom, fused = fuse_row_candidates(rows)
+    assert top.text == "59S3"
+    assert top.raw_text == "5953"
+    assert top.correction_used is True
+    assert bottom.text == "61475"
+    assert fused.raw_text == "595361475"
+    assert fused.normalized_text == "59S361475"
+
+
+def test_second_motorcycle_confusion_regression():
+    # Independent crops expose a province prefix and a letter/digit suffix.
+    rows = _rows("top", ["598", "S3"])
+    rows += _rows("bottom", ["09L24", "09124", "09124"])
+    top, bottom, fused = fuse_row_candidates(rows)
+    assert top.text == "59S3"
+    assert bottom.text == "09124"
+    assert fused.normalized_text == "59S309124"
+
+
+def test_missing_characters_require_direct_ocr_evidence():
+    unsupported = _rows("top", ["360", "360"])
+    top, _, _ = fuse_row_candidates(unsupported)
+    assert top.text != "36B4"
+
+    supported = unsupported + _rows("top", ["36B4", "36B4"], confidence=0.76)
+    supported += _rows("bottom", ["56087", "56087"], confidence=0.84)
+    top, bottom, fused = fuse_row_candidates(supported)
+    assert top.text == "36B4"
+    assert bottom.text == "56087"
+    assert fused.normalized_text == "36B456087"
+
+
+def test_small_detections_skip_easyocr(monkeypatch):
+    image = np.zeros((100, 100, 3), dtype=np.uint8)
+    detections = [
+        Detection(0, "plate", 0.9, (5, 5, 19, 33)),
+        Detection(0, "plate", 0.8, (30, 10, 51, 25)),
+    ]
+    monkeypatch.setattr(pipeline_module, "detect_plates", lambda _image, _confidence: detections)
+
+    def unexpected_ocr(*_args, **_kwargs):
+        raise AssertionError("EasyOCR must not run for a detection below the quality threshold")
+
+    monkeypatch.setattr(pipeline_module, "run_ocr", unexpected_ocr)
+    analyses = analyze_license_plates(image, 0.25)
+    assert len(analyses) == 2
+    assert all(analysis.ocr_status == "too_small" for analysis in analyses)
+    assert all(analysis.ocr_calls == 0 for analysis in analyses)
+    assert all(analysis.public_result()["raw_text"] == "" for analysis in analyses)
+    assert all(analysis.public_result()["is_valid"] is False for analysis in analyses)
 
 
 def teardown_module():

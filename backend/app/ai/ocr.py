@@ -68,7 +68,11 @@ def sort_fragments_spatially(fragments: list) -> list:
     return ordered
 
 
-def run_ocr(image: np.ndarray, source_region: str = "full") -> OCRResult:
+def run_ocr(
+    image: np.ndarray,
+    source_region: str = "full",
+    decoder: str = "greedy",
+) -> OCRResult:
     reader = get_ocr_reader()
     with _ocr_inference_lock:
         fragments = reader.readtext(
@@ -76,7 +80,7 @@ def run_ocr(image: np.ndarray, source_region: str = "full") -> OCRResult:
             detail=1,
             paragraph=False,
             allowlist=ALLOWLIST,
-            decoder="beamsearch",
+            decoder=decoder,
             beamWidth=3,
         )
     if not fragments:

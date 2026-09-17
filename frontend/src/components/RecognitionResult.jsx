@@ -6,6 +6,7 @@ function variantLabel(value) {
 }
 
 export default function RecognitionResult({ detection, index, selected, onUse }) {
+  const tooSmall = detection.ocr_status === 'too_small'
   return (
     <article className={`recognition-card ${selected ? 'selected' : ''}`}>
       <div className="recognition-card-heading">
@@ -14,7 +15,7 @@ export default function RecognitionResult({ detection, index, selected, onUse })
           <strong>{detection.normalized_text || detection.raw_text || 'Unread'}</strong>
         </div>
         <span className={`validity-badge ${detection.is_valid ? 'valid' : 'invalid'}`}>
-          {detection.is_valid ? 'Valid' : 'Needs correction'}
+          {detection.is_valid ? 'Valid' : tooSmall ? 'Too small' : 'Needs correction'}
         </span>
       </div>
       <div className="recognition-metrics">
@@ -22,8 +23,13 @@ export default function RecognitionResult({ detection, index, selected, onUse })
         <span>OCR <strong>{Math.round(detection.ocr_confidence * 100)}%</strong></span>
         <span>Variant <strong>{variantLabel(detection.preprocessing_variant)}</strong></span>
       </div>
+      {tooSmall && (
+        <p className="helper-text mt-2 mb-0">
+          License plate detected, but the image is too small for reliable recognition.
+        </p>
+      )}
       <button className={`btn btn-sm ${selected ? 'btn-success' : 'btn-outline-primary'}`} onClick={onUse}>
-        {selected ? 'Selected for check-in' : detection.is_valid ? 'Use this plate' : 'Use / Edit'}
+        {selected ? 'Selected for check-in' : detection.is_valid ? 'Use this plate' : tooSmall ? 'Enter manually' : 'Use / Edit'}
       </button>
     </article>
   )
