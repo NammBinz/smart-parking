@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Frontend
+node_modules/
+dist/
+*.local
+
+# SQLite transient files (the main database path is intentionally not ignored)
+*.db-journal
+*.db-shm
+*.db-wal
+
+# Environment and editor files
+.env
+.env.*
+!.env.example
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Test databases
+backend/tests/test_*.db
+
+# backend/models/best.pt is intentionally tracked and must not be ignored.
