@@ -10,10 +10,16 @@ from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
 from app.ai.model_manager import BACKEND_DIR, ModelInitializationError, runtime_status
+from app.ai.frame_quality import analyze_frame_quality
 from app.ai.pipeline import recognize_license_plates
 from app.database import get_db
 from app.models import Setting
-from app.schemas.ai import AIStatusResponse, FrameRecognitionResponse, RecognitionResponse
+from app.schemas.ai import (
+    AIStatusResponse,
+    FrameAnalysisResponse,
+    FrameRecognitionResponse,
+    RecognitionResponse,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -74,6 +80,23 @@ async def _recognize(image: np.ndarray, confidence: float) -> list[dict[str, obj
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="License plate recognition failed",
+        ) from exc
+
+
+async def _analyze_frame_quality(image: np.ndarray, confidence: float):
+    try:
+        return await run_in_threadpool(analyze_frame_quality, image, confidence)
+    except ModelInitializationError as exc:
+        logger.exception("AI runtime initialization failed")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
+    except Exception as exc:
+        logger.exception("Camera frame analysis failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Camera frame analysis failed",
         ) from exc
 
 
@@ -152,4 +175,46 @@ async def recognize_frame(
         detections=detections,
         best_index=0 if detections else None,
         message=None if recognized else "No license plate detected",
+    )
+
+
+@router.post("/analyze-frame", response_model=FrameAnalysisResponse)
+async def analyze_frame(
+    file: UploadFile | None = File(default=None),
+    db: Session = Depends(get_db),
+):
+    _, _, image = await _decode_image_upload(file)
+    settings = db.scalar(select(Setting).limit(1))
+    if settings is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Settings not configured",
+        )
+
+    analysis = await _analyze_frame_quality(image, float(settings.yolo_confidence))
+    image_height, image_width = image.shape[:2]
+    return FrameAnalysisResponse(
+        image_width=image_width,
+        image_height=image_height,
+        yolo_inference_time=analysis.yolo_seconds,
+        quality_scoring_time=analysis.quality_seconds,
+        detections=[
+            {
+                "class_id": item.detection.class_id,
+                "class_name": item.detection.class_name,
+                "bbox": dict(zip(("x1", "y1", "x2", "y2"), item.detection.bbox)),
+                "detection_confidence": item.detection.confidence,
+                "bbox_width": item.width,
+                "bbox_height": item.height,
+                "bbox_area": item.area,
+                "sharpness": item.sharpness,
+                "brightness": item.brightness,
+                "brightness_quality": item.brightness_quality,
+                "size_quality": item.size_quality,
+                "center_bonus": item.center_bonus,
+                "quality_score": item.quality_score,
+                "camera_status": item.camera_status,
+            }
+            for item in analysis.detections
+        ],
     )

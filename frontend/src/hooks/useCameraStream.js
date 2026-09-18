@@ -53,8 +53,8 @@ export default function useCameraStream() {
     setStatus('STARTING')
     setError('')
     const video = selectedDeviceId
-      ? { deviceId: { exact: selectedDeviceId }, width: { ideal: 1280 }, height: { ideal: 720 } }
-      : { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } }
+      ? { deviceId: { exact: selectedDeviceId }, width: { ideal: 1920 }, height: { ideal: 1080 } }
+      : { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } }
     try {
       const nextStream = await navigator.mediaDevices.getUserMedia({ audio: false, video })
       nextStream.getVideoTracks().forEach((track) => {
@@ -63,6 +63,10 @@ export default function useCameraStream() {
           setStatus('ERROR')
           setError('The camera was disconnected.')
         }, { once: true })
+        const capabilities = track.getCapabilities?.()
+        if (capabilities?.focusMode?.includes?.('continuous')) {
+          track.applyConstraints?.({ advanced: [{ focusMode: 'continuous' }] }).catch(() => {})
+        }
       })
       setStream(nextStream)
       setStatus('ACTIVE')

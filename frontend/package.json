@@ -5,8 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
-    "test": "node --test src/utils/plateConsensus.test.js",
+    "build": "vite build --configLoader runner",
+    "test": "node --test src/utils/plateConsensus.test.js src/utils/frameSelection.test.js",
     "preview": "vite preview"
   },
   "dependencies": {

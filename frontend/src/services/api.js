@@ -32,6 +32,16 @@ export const recognizeFrame = (blob, options = {}) => {
     })
     .then(({ data }) => data)
 }
+export const analyzeFrame = (blob, options = {}) => {
+  const formData = new FormData()
+  formData.append('file', blob, 'camera-frame.jpg')
+  return api
+    .post('/api/ai/analyze-frame', formData, {
+      timeout: 30000,
+      signal: options.signal,
+    })
+    .then(({ data }) => data)
+}
 
 export function errorMessage(error) {
   return error.response?.data?.detail || error.message || 'Something went wrong.'

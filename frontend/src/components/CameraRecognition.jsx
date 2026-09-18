@@ -2,15 +2,23 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 
 import useCameraStream from '../hooks/useCameraStream'
 import useRecognitionLoop from '../hooks/useRecognitionLoop'
-import { errorMessage } from '../services/api'
+import { errorMessage, recognizeFrame } from '../services/api'
 import { normalizePlate } from '../utils/format'
 import {
-  CONSENSUS_REQUIRED_MATCHES,
   advanceObservationWindow,
   detectionObservation,
   selectPrimaryDetection,
   summarizeConsensus,
 } from '../utils/plateConsensus'
+import {
+  MIN_QUALITY_FRAMES,
+  OCR_EVIDENCE_WINDOW_SIZE,
+  OCR_REQUIRED_MATCHES,
+  STRONG_OCR_CONFIDENCE,
+  rankBestFrames,
+  selectPrimaryQualityDetection,
+  updateFrameBuffer,
+} from '../utils/frameSelection'
 import CameraControls from './CameraControls'
 import CameraVideo from './CameraVideo'
 
@@ -26,6 +34,7 @@ export const CAMERA_STATES = Object.freeze({
 
 const DEFAULT_RECOGNITION_INTERVAL_MS = 1500
 const DEFAULT_RESUME_DELAY_MS = 2000
+const CAMERA_DEBUG = import.meta.env.VITE_CAMERA_DEBUG === 'true'
 
 export default function CameraRecognition({
   onStablePlate,
@@ -38,6 +47,11 @@ export default function CameraRecognition({
   const videoRef = useRef(null)
   const canvasRef = useRef(null)
   const observationsRef = useRef([])
+  const frameBufferRef = useRef([])
+  const frameIdRef = useRef(0)
+  const missedFramesRef = useRef(0)
+  const ocrCallsRef = useRef(0)
+  const scanStartedRef = useRef(performance.now())
   const stableRef = useRef(null)
   const previousResetKey = useRef(workflowResetKey)
   const camera = useCameraStream()
@@ -45,9 +59,10 @@ export default function CameraRecognition({
   const [machineState, setMachineState] = useState(CAMERA_STATES.IDLE)
   const [latestRecognition, setLatestRecognition] = useState(null)
   const [latestPlate, setLatestPlate] = useState('')
-  const [consensus, setConsensus] = useState(summarizeConsensus([]))
+  const [consensus, setConsensus] = useState(summarizeConsensus([], OCR_REQUIRED_MATCHES))
   const [stablePlate, setStablePlate] = useState(null)
   const [recognitionError, setRecognitionError] = useState('')
+  const [cameraFeedback, setCameraFeedback] = useState('Searching for plate')
 
   useEffect(() => {
     if (videoRef.current) videoRef.current.srcObject = camera.stream
@@ -55,12 +70,17 @@ export default function CameraRecognition({
 
   const clearRecognition = useCallback((notifyParent = true) => {
     observationsRef.current = []
+    frameBufferRef.current = []
+    missedFramesRef.current = 0
+    ocrCallsRef.current = 0
+    scanStartedRef.current = performance.now()
     stableRef.current = null
     setLatestRecognition(null)
     setLatestPlate('')
-    setConsensus(summarizeConsensus([]))
+    setConsensus(summarizeConsensus([], OCR_REQUIRED_MATCHES))
     setStablePlate(null)
     setRecognitionError('')
+    setCameraFeedback('Searching for plate')
     if (notifyParent) onResetPlate?.()
   }, [onResetPlate])
 
@@ -95,26 +115,108 @@ export default function CameraRecognition({
     }
   }, [mode, onStablePlate])
 
-  const handleRecognition = useCallback(async (response) => {
+  const handleFrameAnalysis = useCallback(async (response, blob) => {
     setLatestRecognition(response)
-    const primary = selectPrimaryDetection(response)
-    setLatestPlate(primary?.normalized_text || '')
-    const nextWindow = advanceObservationWindow(
-      observationsRef.current,
-      detectionObservation(primary),
-    )
+    const primary = selectPrimaryQualityDetection(response)
+    if (CAMERA_DEBUG) {
+      console.debug('[camera] analysis', {
+        yoloMs: Math.round(response.yolo_inference_time * 1000),
+        qualityMs: Math.round(response.quality_scoring_time * 1000),
+        primary,
+      })
+    }
+
+    if (!primary) {
+      missedFramesRef.current += 1
+      setCameraFeedback('Searching for plate')
+      if (missedFramesRef.current >= 2) {
+        frameBufferRef.current = []
+        observationsRef.current = []
+        ocrCallsRef.current = 0
+        scanStartedRef.current = performance.now()
+        setConsensus(summarizeConsensus([], OCR_REQUIRED_MATCHES))
+        setLatestPlate('')
+      }
+      return
+    }
+
+    missedFramesRef.current = 0
+    if (primary.camera_status !== 'candidate') {
+      setCameraFeedback(
+        primary.camera_status === 'too_small'
+          ? 'Too far — move the plate closer'
+          : primary.camera_status === 'too_blurry'
+            ? 'Image is blurry — hold steady'
+            : 'Move the plate closer and hold steady',
+      )
+      return
+    }
+
+    const update = updateFrameBuffer(frameBufferRef.current, {
+      id: ++frameIdRef.current,
+      blob,
+      detection: primary,
+    })
+    frameBufferRef.current = update.buffer
+    if (update.reset) {
+      observationsRef.current = []
+      ocrCallsRef.current = 0
+      scanStartedRef.current = performance.now()
+      setConsensus(summarizeConsensus([], OCR_REQUIRED_MATCHES))
+      setLatestPlate('')
+    }
+    if (frameBufferRef.current.length < MIN_QUALITY_FRAMES) {
+      setCameraFeedback('Plate detected — waiting for a clearer image')
+      return
+    }
+
+    setCameraFeedback('Reading plate')
+    const ranked = rankBestFrames(frameBufferRef.current)
+    let nextWindow = observationsRef.current
+    for (const [rankIndex, candidate] of ranked.slice(0, 3).entries()) {
+      const ocrStarted = performance.now()
+      const ocrResponse = await recognizeFrame(candidate.blob)
+      ocrCallsRef.current += 1
+      const detection = selectPrimaryDetection(ocrResponse)
+      const observation = detectionObservation(detection)
+      if (detection?.normalized_text) setLatestPlate(detection.normalized_text)
+      nextWindow = advanceObservationWindow(nextWindow, observation, OCR_EVIDENCE_WINDOW_SIZE)
+      if (CAMERA_DEBUG) {
+        console.debug('[camera] selected frame OCR', {
+          qualityScore: candidate.qualityScore,
+          sharpness: candidate.detection.sharpness,
+          selectedBestFrameIndex: candidate.id,
+          selectedRank: rankIndex + 1,
+          ocrCalls: ocrCallsRef.current,
+          elapsedMs: Math.round(performance.now() - ocrStarted),
+          plate: observation?.plate || null,
+          ocrConfidence: observation?.ocrConfidence || 0,
+        })
+      }
+      if (observation && observation.ocrConfidence >= STRONG_OCR_CONFIDENCE) break
+    }
+
+    // Release the entire batch so OCR cannot run on every sampled camera frame.
+    frameBufferRef.current = []
     observationsRef.current = nextWindow
-    const nextConsensus = summarizeConsensus(nextWindow)
+    const nextConsensus = summarizeConsensus(nextWindow, OCR_REQUIRED_MATCHES)
     setConsensus(nextConsensus)
     if (nextConsensus.stable && !stableRef.current) {
-      const stable = {
-        ...nextConsensus.leader,
-        manuallyCorrected: false,
-      }
+      const stable = { ...nextConsensus.leader, manuallyCorrected: false }
       stableRef.current = stable
       setStablePlate(stable)
+      setCameraFeedback('Stable plate detected')
       setMachineState(CAMERA_STATES.STABLE)
+      if (CAMERA_DEBUG) {
+        console.debug('[camera] stable recognition', {
+          finalOcr: stable.plate,
+          ocrCalls: ocrCallsRef.current,
+          timeToStableMs: Math.round(performance.now() - scanStartedRef.current),
+        })
+      }
       await publishStablePlate(stable)
+    } else {
+      setCameraFeedback('Hold steady for recognition')
     }
   }, [publishStablePlate])
 
@@ -130,7 +232,7 @@ export default function CameraRecognition({
     videoRef,
     canvasRef,
     intervalMs: recognitionIntervalMs,
-    onResponse: handleRecognition,
+    onResponse: handleFrameAnalysis,
     onError: handleRecognitionError,
   })
 
@@ -210,13 +312,13 @@ export default function CameraRecognition({
         </div>
         <div>
           <span>Stability</span>
-          <strong>{leaderCount} / {CONSENSUS_REQUIRED_MATCHES} votes</strong>
-          <small>{leaderCount} matches in last {consensus.sampledFrames} sampled frames</small>
+          <strong>{leaderCount} / {OCR_REQUIRED_MATCHES} votes</strong>
+          <small>{leaderCount} matches in last {consensus.sampledFrames} selected frames</small>
         </div>
         <div>
           <span>Status</span>
           <strong className={stablePlate ? 'stable-text' : ''}>
-            {stablePlate ? '✓ Stable' : isProcessing ? 'Recognizing...' : machineState === CAMERA_STATES.ERROR ? 'Paused after error' : camera.stream ? 'Scanning' : 'Idle'}
+            {stablePlate ? '✓ Stable' : isProcessing ? cameraFeedback : machineState === CAMERA_STATES.ERROR ? 'Paused after error' : camera.stream ? cameraFeedback : 'Idle'}
           </strong>
         </div>
       </div>

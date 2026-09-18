@@ -27,7 +27,7 @@ export default function CameraVideo({ videoRef, stream, recognition }) {
         return (
           <div className="camera-detection-box" style={style} key={`${x1}-${y1}-${index}`}>
             <span>
-              {detection.normalized_text || 'Unread'} · {Math.round(detection.detection_confidence * 100)}%
+              {detection.normalized_text || (detection.camera_status === 'candidate' ? 'Plate' : detection.camera_status === 'too_blurry' ? 'Hold steady' : 'Move closer')} · {Math.round(detection.detection_confidence * 100)}%
             </span>
           </div>
         )

@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 
-import { recognizeFrame } from '../services/api'
+import { analyzeFrame } from '../services/api'
 
-const MAX_CAPTURE_WIDTH = 1280
-const MAX_CAPTURE_HEIGHT = 720
+const MAX_CAPTURE_WIDTH = 1920
+const MAX_CAPTURE_HEIGHT = 1080
 const JPEG_QUALITY = 0.85
 
 export function captureVideoFrame(video, canvas) {
@@ -68,8 +68,8 @@ export default function useRecognitionLoop({
       try {
         const blob = await captureVideoFrame(videoRef.current, canvasRef.current)
         if (!blob) return
-        const response = await recognizeFrame(blob, { signal: controller.signal })
-        if (!cancelled) await responseRef.current?.(response)
+        const response = await analyzeFrame(blob, { signal: controller.signal })
+        if (!cancelled) await responseRef.current?.(response, blob)
       } catch (error) {
         if (!cancelled && error?.name !== 'CanceledError' && error?.name !== 'AbortError') {
           errorRef.current?.(error)

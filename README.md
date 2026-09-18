@@ -1,6 +1,6 @@
 # Smart Parking Management System
 
-A university web application for parking-space management, vehicle check-in, billed checkout, payments, reporting, uploaded-image recognition, and **Phase 3 live-camera license plate recognition**. All Phase 1 manual workflows and Phase 2 image recognition remain available.
+A university web application for parking-space management, vehicle check-in, billed checkout, payments, reporting, uploaded-image recognition, and **Phase 3.5 stabilized live-camera license plate recognition**. All Phase 1 manual workflows and Phase 2 image recognition remain available.
 
 ## Technology stack
 
@@ -141,16 +141,18 @@ npm test
 
 Open the **Camera** tab and grant browser camera permission. Camera access uses `navigator.mediaDevices.getUserMedia()` and supports available video-input selection where the browser exposes device labels. Leaving the Camera tab or pressing **Stop Camera** stops every media track.
 
-The browser captures a JPEG frame approximately every 1.5 seconds and sends it to:
+The browser captures a JPEG frame approximately every 1.5 seconds and first sends it to the YOLO-only quality endpoint:
 
 ```text
-POST /api/ai/recognize-frame
+POST /api/ai/analyze-frame
 Content-Type: multipart/form-data
 ```
 
-Only one recognition request is active at a time. The endpoint decodes each frame in memory and reuses the same YOLO, quality-gate, OCR, ranking, and row-fusion pipeline as uploaded images. Camera frames and continuous video are never written to `backend/uploads/` or persisted elsewhere.
+Only one camera request is active at a time. The endpoint decodes each frame in memory, runs YOLO, and returns bounding-box size, area, Laplacian sharpness, brightness, center-zone bonus, weighted quality score, and separate YOLO/quality timings. It does not run OCR. Camera frames and continuous video are never written to `backend/uploads/` or persisted elsewhere.
 
-The camera workflow provides explicit **ENTRY** and **EXIT** modes. Exact normalized plates vote in a rolling five-frame window; three matching observations are required for stability. Empty, invalid, unreadable, and `too_small` samples advance the window but do not cast positive votes. For frames containing multiple vehicles, all YOLO boxes are displayed, while one valid primary detection—preferably inside the central capture zone—enters consensus. This is optimized for a single-vehicle parking gate rather than general multi-vehicle tracking.
+The browser keeps a maximum of five JPEG blobs in a short in-memory buffer for one spatially associated vehicle. Tiny, distant, or blurry crops are rejected with actionable feedback. Once three usable frames are available, relative sharpness and the other quality signals select the best frame for `POST /api/ai/recognize-frame`. A second or third candidate is tried only if the preceding OCR is invalid or weak; the full batch is then released, so OCR does not run on every sampled frame. Camera constraints prefer 1920×1080 and request continuous autofocus when the browser and camera support it.
+
+The camera workflow provides explicit **ENTRY** and **EXIT** modes. Exact normalized OCR results vote in a rolling three-selected-frame evidence window; two matching results are required for stability. Empty, invalid, unreadable, and `too_small` results do not cast positive votes. A materially different bounding box resets both the quality buffer and OCR evidence. For frames containing multiple vehicles, all YOLO boxes are displayed while the centered OCR-ready detection is tracked. This remains optimized for a single-vehicle parking gate rather than general multi-vehicle tracking.
 
 When a plate becomes stable, scanning pauses:
 
@@ -158,3 +160,34 @@ When a plate becomes stable, scanning pauses:
 - **EXIT:** the existing checkout preview is loaded, then the user selects payment and confirms checkout.
 
 Neither workflow mutates parking state automatically. Stable plates remain editable, and manual correction removes the OCR-confidence association from the edited text. After a successful workflow, scanning resumes after a short cooldown so the same vehicle does not trigger repeatedly.
+
+## Phase 3.5 accuracy evaluation
+
+The normal OCR pipeline remains bounded to at most six EasyOCR calls per detected plate. If ordinary candidates are weak, one conservative four-corner perspective rectification may replace a fallback attempt; unsafe or ambiguous geometry returns the original crop unchanged. The supplied YOLO weights are unchanged and no training is performed.
+
+Run the reproducible labeled-image benchmark from `backend/`:
+
+```powershell
+python scripts/benchmark_recognition.py
+python scripts/benchmark_recognition.py --output-json benchmark/results.json
+```
+
+Ground truth is in `backend/benchmark/ground_truth.csv` and contains only manually known plates from the repository images. The report separates detector success from exact OCR accuracy and includes edit distance, character accuracy, error category, YOLO time, quality-gate time, OCR time, and total recognition time. After model warm-up on the current CPU environment, the Phase 3.5 baseline is 4/4 detected plates, 3/4 exact matches (75%), and 88.9% mean character accuracy; the remaining labeled plate is a missing-character OCR error.
+
+The CSV format is:
+
+```csv
+filename,plate
+image1.jpg,29Z158344
+```
+
+PaddleOCR is an optional benchmark comparison and is not a production dependency or automatic dual-OCR path:
+
+```powershell
+pip install -r requirements-paddle.txt
+python scripts/benchmark_recognition.py --compare-paddle
+```
+
+The OCR adapter reads `PRIMARY_OCR_ENGINE` (default `easyocr`) and `ENABLE_SECONDARY_OCR` (default `false`) for explicitly integrated experiments, but the production API intentionally does not call the secondary fallback because no benchmark advantage has yet been established.
+
+Enable camera timing and quality diagnostics in the browser console with `VITE_CAMERA_DEBUG=true`. Debug logging contains numeric metrics and recognized candidates only; it does not save frames.

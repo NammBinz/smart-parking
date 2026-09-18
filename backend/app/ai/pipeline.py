@@ -16,6 +16,7 @@ from app.ai.preprocess import (
     tight_top_row_crop,
 )
 from app.ai.quality import assess_detection_quality
+from app.ai.rectification import rectify_plate_crop
 from app.ai.validator import normalize_ocr_text, validate_plate_candidate
 
 
@@ -117,6 +118,7 @@ class DetectionAnalysis:
     ocr_calls: int = 0
     decoders_used: tuple[str, ...] = ()
     yolo_inference_seconds: float = 0.0
+    quality_gate_seconds: float = 0.0
     preprocessing_seconds: float = 0.0
     ranking_seconds: float = 0.0
     total_recognition_seconds: float = 0.0
@@ -757,6 +759,27 @@ def _analyze_two_line_normal(
     if _row_evidence_is_strong(top, bottom, fusion):
         return candidates, rows, metrics
 
+    if metrics.ocr_calls < MAX_NORMAL_OCR_CALLS and (fusion is None or not fusion.is_valid):
+        rectification_started = perf_counter()
+        rectified_crop, applied = rectify_plate_crop(padded_crop)
+        metrics.preprocessing_seconds += perf_counter() - rectification_started
+        if applied:
+            rectified_cache = PreprocessingCache(rectified_crop)
+            _run_full_candidate(
+                rectified_cache,
+                "grayscale",
+                "padding10_rectified",
+                padding_ratio,
+                "greedy",
+                candidates,
+                rows,
+                tracker,
+                metrics,
+            )
+            top, bottom, fusion = fuse_row_candidates(rows)
+            if _row_evidence_is_strong(top, bottom, fusion):
+                return candidates, rows, metrics
+
     weak_top = (
         top is None
         or top.score < STRONG_TOP_SCORE
@@ -824,6 +847,22 @@ def _analyze_standard_normal(
                 sharpened_image = variant_image
 
     winner = select_best_candidate(candidates)
+    if not winner.is_valid or winner.ocr_confidence < 0.45:
+        rectification_started = perf_counter()
+        source_crop = crop_with_padding(image, detection.bbox, 0.10)
+        rectified_crop, applied = rectify_plate_crop(source_crop)
+        metrics.preprocessing_seconds += perf_counter() - rectification_started
+        if applied and metrics.ocr_calls < MAX_NORMAL_OCR_CALLS:
+            rectified_cache = PreprocessingCache(rectified_crop)
+            variant_image = _prepared_variant(rectified_cache, "grayscale", metrics)
+            identity = "padding10_rectified_grayscale"
+            result, elapsed = _timed_ocr(
+                variant_image, "full", "greedy", identity, tracker, metrics
+            )
+            candidates.append(
+                _candidate_from_result(result, identity, "full", 0.10, elapsed)
+            )
+            winner = select_best_candidate(candidates)
     if sharpened_image is not None and (not winner.is_valid or winner.ocr_confidence < 0.45):
         result, elapsed = _timed_ocr(
             sharpened_image,
@@ -947,7 +986,9 @@ def _analyze_detection(
     tracker: _ProgressTracker,
 ) -> DetectionAnalysis:
     analysis_started = perf_counter()
+    quality_started = perf_counter()
     quality = assess_detection_quality(detection)
+    quality_elapsed = perf_counter() - quality_started
     if not quality.should_run:
         return DetectionAnalysis(
             detection=detection,
@@ -960,6 +1001,7 @@ def _analyze_detection(
             row_candidates=[],
             ocr_execution_seconds=0.0,
             ocr_status=quality.status,
+            quality_gate_seconds=quality_elapsed,
             total_recognition_seconds=perf_counter() - analysis_started,
             debug_images={"crop": crop_to_bbox(image, detection.bbox)} if capture_images else {},
         )
@@ -1005,6 +1047,7 @@ def _analyze_detection(
         correction_count=winner.correction_count,
         ocr_calls=metrics.ocr_calls,
         decoders_used=tuple(dict.fromkeys(metrics.decoders)),
+        quality_gate_seconds=quality_elapsed,
         preprocessing_seconds=metrics.preprocessing_seconds,
         ranking_seconds=metrics.ranking_seconds,
         total_recognition_seconds=perf_counter() - analysis_started,
