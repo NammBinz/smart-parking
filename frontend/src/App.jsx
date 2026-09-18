@@ -85,8 +85,40 @@ export default function App() {
       entry_detection_confidence: detection.detection_confidence,
       entry_ocr_confidence: detection.ocr_confidence,
       manuallyCorrected: false,
+      source: 'upload',
     })
   }
+
+  const handleCameraStable = useCallback(async ({
+    mode,
+    plate: cameraPlate,
+    manuallyCorrected,
+    detectionConfidence,
+    ocrConfidence,
+  }) => {
+    setPlate(cameraPlate)
+    setAiMetadata({
+      originalPlate: cameraPlate,
+      entry_image: null,
+      entry_detection_confidence: detectionConfidence,
+      entry_ocr_confidence: manuallyCorrected ? null : ocrConfidence,
+      manuallyCorrected,
+      source: 'camera',
+    })
+
+    if (mode !== 'EXIT') return
+    setBusy(true)
+    try {
+      const preview = await getCheckoutPreview(cameraPlate)
+      setCheckoutPreview(preview)
+    } catch (err) {
+      const message = errorMessage(err)
+      notify(message, 'error')
+      throw new Error(message)
+    } finally {
+      setBusy(false)
+    }
+  }, [notify])
 
   const resetAiSelection = () => {
     if (aiMetadata) setPlate('')
@@ -97,6 +129,12 @@ export default function App() {
     setPlate('')
     setAiMetadata(null)
   }
+
+  const resetCameraWorkflow = useCallback(() => {
+    setPlate('')
+    setAiMetadata(null)
+    setCheckoutPreview(null)
+  }, [])
 
   const confirmCheckIn = async () => {
     setBusy(true)
@@ -115,7 +153,7 @@ export default function App() {
       setAiMetadata(null)
       setRecognitionResetKey((value) => value + 1)
       await refresh()
-      notify(`Vehicle checked in to ${checkInSlot.code}.`)
+      notify(`Vehicle checked in successfully. Slot ${checkInSlot.code}.`)
     } catch (err) {
       notify(errorMessage(err), 'error')
     } finally {
@@ -141,8 +179,11 @@ export default function App() {
     try {
       await checkout({ plate_number: checkoutPreview.plate_number, payment_method: paymentMethod })
       setCheckoutPreview(null)
+      setPlate('')
+      setAiMetadata(null)
+      setRecognitionResetKey((value) => value + 1)
       await refresh()
-      notify(`Payment completed. ${checkoutPreview.plate_number} checked out.`)
+      notify('Payment completed and vehicle checked out.')
     } catch (err) {
       notify(errorMessage(err), 'error')
     } finally {
@@ -158,12 +199,19 @@ export default function App() {
         <div className="content-layout">
           <InputPanel
             plate={plate}
-            plateSource={aiMetadata ? (aiMetadata.manuallyCorrected ? 'AI image · manually corrected' : 'Recognized from uploaded image') : ''}
+            plateSource={aiMetadata ? (
+              aiMetadata.manuallyCorrected
+                ? `${aiMetadata.source === 'camera' ? 'Camera' : 'AI image'} · manually corrected`
+                : aiMetadata.source === 'camera' ? 'Stable camera consensus' : 'Recognized from uploaded image'
+            ) : ''}
             onPlateChange={handlePlateChange}
             onAiPlate={selectAiPlate}
             onResetAiSelection={resetAiSelection}
             onClear={clearPlate}
             recognitionResetKey={recognitionResetKey}
+            onCameraStable={handleCameraStable}
+            onCameraPlateEdit={handlePlateChange}
+            onCameraReset={resetCameraWorkflow}
           />
           <ParkingGrid slots={slots} plate={plate} onSlotClick={handleSlotClick} loading={loading} />
         </div>

@@ -69,6 +69,41 @@ main { width: min(1500px, calc(100% - 48px)); margin: 0 auto; padding: 28px 0 48
 .recognition-metrics { display: flex; flex-wrap: wrap; gap: 7px 13px; margin: 11px 0; color: #6a7982; font-size: .72rem; }
 .recognition-metrics strong { color: #354a57; }
 
+.camera-recognition { display: grid; gap: 16px; }
+.camera-controls { display: grid; gap: 13px; }
+.camera-control-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.camera-control-label { display: block; margin-bottom: 6px; color: #74828b; font-size: .68rem; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+.camera-status { display: inline-flex; align-items: center; gap: 6px; color: #74828b; font-size: .82rem; font-weight: 750; }
+.camera-status i { width: 8px; height: 8px; border-radius: 50%; background: #9aa6ad; }
+.camera-status.active { color: #267052; }
+.camera-status.active i { background: #36b778; box-shadow: 0 0 0 4px rgba(54,183,120,.13); }
+.camera-mode-toggle { display: grid; grid-template-columns: 1fr 1fr; padding: 3px; border-radius: 8px; background: #edf1f3; }
+.camera-mode-toggle button { border: 0; border-radius: 6px; padding: 6px 9px; background: transparent; color: #667681; font-size: .72rem; font-weight: 850; }
+.camera-mode-toggle button.active { background: white; color: #216b4d; box-shadow: 0 1px 5px rgba(31,45,61,.14); }
+.camera-device-select { margin: 0; color: #4e5d66; font-size: .78rem; font-weight: 700; }
+.camera-device-select select { margin-top: 6px; font-size: .82rem; }
+.camera-action-row { display: flex; flex-wrap: wrap; gap: 9px; }
+.camera-video-wrap { position: relative; min-height: 230px; overflow: hidden; border: 1px solid #dbe3e7; border-radius: 11px; background: #14222b; }
+.camera-video-wrap video { display: block; width: 100%; min-height: 230px; max-height: 390px; object-fit: contain; }
+.camera-video-empty { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; padding: 20px; color: #9eb0ba; text-align: center; }
+.camera-video-empty span { font-size: 2.2rem; }
+.camera-video-empty p { margin: 8px 0 0; font-size: .82rem; }
+.capture-zone { position: absolute; left: 15%; top: 25%; width: 70%; height: 55%; border: 2px dashed rgba(255,255,255,.78); border-radius: 8px; box-shadow: 0 0 0 999px rgba(7,18,24,.12); pointer-events: none; }
+.capture-zone span { position: absolute; left: 50%; bottom: 7px; transform: translateX(-50%); padding: 3px 7px; border-radius: 4px; background: rgba(10,28,38,.76); color: white; font-size: .6rem; white-space: nowrap; }
+.camera-detection-box { position: absolute; z-index: 2; border: 2px solid #f2c14e; background: rgba(242,193,78,.09); pointer-events: none; }
+.camera-detection-box span { position: absolute; left: -2px; bottom: 100%; max-width: 180px; padding: 3px 6px; overflow: hidden; border-radius: 3px 3px 0 0; background: #102b39; color: white; font-size: .6rem; font-weight: 800; text-overflow: ellipsis; white-space: nowrap; }
+.camera-capture-canvas { display: none; }
+.camera-alert { margin: 0; font-size: .82rem; }
+.camera-recognition-status { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.camera-recognition-status > div { min-width: 0; padding: 10px; border: 1px solid #e2e8eb; border-radius: 8px; background: #f8fafb; }
+.camera-recognition-status span, .camera-recognition-status small { display: block; color: #78868e; font-size: .64rem; }
+.camera-recognition-status strong { display: block; margin: 3px 0; overflow: hidden; color: #314956; font-size: .76rem; text-overflow: ellipsis; white-space: nowrap; }
+.camera-recognition-status .stable-text { color: #267052; }
+.stable-plate-card { padding: 15px; border: 1px solid #b9ddcb; border-radius: 10px; background: #f0faf5; }
+.stable-plate-card > p:first-child { margin: 0 0 10px; color: #267052; font-size: .72rem; font-weight: 850; letter-spacing: .05em; text-transform: uppercase; }
+.stable-plate-card small { display: block; margin-top: 7px; color: #617970; }
+.stable-guidance { margin: 11px 0; color: #49635a; font-size: .8rem; }
+
 .legend { display: flex; flex-wrap: wrap; gap: 12px; font-size: .75rem; color: #667681; }
 .legend span { display: inline-flex; align-items: center; gap: 5px; }
 .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
@@ -127,4 +162,5 @@ main { width: min(1500px, calc(100% - 48px)); margin: 0 auto; padding: 28px 0 48
   .parking-grid { grid-template-columns: repeat(2, 1fr); padding: 14px; gap: 9px; }
   .panel-heading { align-items: flex-start; flex-direction: column; }
   .settings-grid { grid-template-columns: 1fr; }
+  .camera-control-row, .camera-recognition-status { grid-template-columns: 1fr; }
 }

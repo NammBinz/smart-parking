@@ -1,6 +1,6 @@
 # Smart Parking Management System
 
-A university web application for parking-space management, vehicle check-in, billed checkout, payments, reporting, and license plate recognition. The repository currently implements **Phase 2: license plate recognition from uploaded images** while preserving all Phase 1 manual workflows.
+A university web application for parking-space management, vehicle check-in, billed checkout, payments, reporting, uploaded-image recognition, and **Phase 3 live-camera license plate recognition**. All Phase 1 manual workflows and Phase 2 image recognition remain available.
 
 ## Technology stack
 
@@ -116,6 +116,12 @@ Create a production build with:
 npm run build
 ```
 
+Run the frontend consensus tests with:
+
+```powershell
+npm test
+```
+
 ## Phase 2 features
 
 - All Phase 1 manual check-in, checkout, reporting, settings, and slot features
@@ -131,6 +137,24 @@ npm run build
 - Explicit candidate selection and manual correction before check-in
 - Optional source image and confidence metadata stored with parking sessions
 
-## Phase 3
+## Phase 3 live camera
 
-Live camera and video processing are intentionally not included. Phase 3 can add camera modes, continuous-frame processing, multi-frame voting, cooldown logic, and real-time streaming. Automatic camera check-in or checkout is not part of Phase 2.
+Open the **Camera** tab and grant browser camera permission. Camera access uses `navigator.mediaDevices.getUserMedia()` and supports available video-input selection where the browser exposes device labels. Leaving the Camera tab or pressing **Stop Camera** stops every media track.
+
+The browser captures a JPEG frame approximately every 1.5 seconds and sends it to:
+
+```text
+POST /api/ai/recognize-frame
+Content-Type: multipart/form-data
+```
+
+Only one recognition request is active at a time. The endpoint decodes each frame in memory and reuses the same YOLO, quality-gate, OCR, ranking, and row-fusion pipeline as uploaded images. Camera frames and continuous video are never written to `backend/uploads/` or persisted elsewhere.
+
+The camera workflow provides explicit **ENTRY** and **EXIT** modes. Exact normalized plates vote in a rolling five-frame window; three matching observations are required for stability. Empty, invalid, unreadable, and `too_small` samples advance the window but do not cast positive votes. For frames containing multiple vehicles, all YOLO boxes are displayed, while one valid primary detection—preferably inside the central capture zone—enters consensus. This is optimized for a single-vehicle parking gate rather than general multi-vehicle tracking.
+
+When a plate becomes stable, scanning pauses:
+
+- **ENTRY:** the user selects an empty slot and confirms the existing check-in modal.
+- **EXIT:** the existing checkout preview is loaded, then the user selects payment and confirms checkout.
+
+Neither workflow mutates parking state automatically. Stable plates remain editable, and manual correction removes the OCR-confidence association from the edited text. After a successful workflow, scanning resumes after a short cooldown so the same vehicle does not trigger repeatedly.

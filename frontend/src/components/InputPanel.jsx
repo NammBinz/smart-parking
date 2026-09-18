@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { normalizePlate } from '../utils/format'
+import CameraRecognition from './CameraRecognition'
 import UploadRecognition from './UploadRecognition'
 
 const tabs = [
@@ -16,6 +17,9 @@ export default function InputPanel({
   onResetAiSelection,
   onClear,
   recognitionResetKey,
+  onCameraStable,
+  onCameraPlateEdit,
+  onCameraReset,
 }) {
   const [activeTab, setActiveTab] = useState('manual')
 
@@ -26,7 +30,7 @@ export default function InputPanel({
           <p className="eyebrow">Vehicle input</p>
           <h2>Identify vehicle</h2>
         </div>
-        <span className="phase-badge">Phase 2</span>
+        <span className="phase-badge">Phase 3</span>
       </div>
       <div className="tab-list" role="tablist">
         {tabs.map(([key, label]) => (
@@ -44,10 +48,12 @@ export default function InputPanel({
 
       <div className="tab-content-area">
         {activeTab === 'camera' && (
-          <div className="placeholder-state">
-            <div className="placeholder-icon">◎</div>
-            <p>Live camera integration will be implemented in Phase 3.</p>
-          </div>
+          <CameraRecognition
+            onStablePlate={onCameraStable}
+            onManualPlate={onCameraPlateEdit}
+            onResetPlate={onCameraReset}
+            workflowResetKey={recognitionResetKey}
+          />
         )}
         {activeTab === 'upload' && (
           <UploadRecognition

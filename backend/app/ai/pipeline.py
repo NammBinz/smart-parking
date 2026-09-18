@@ -1000,7 +1000,7 @@ def _analyze_detection(
         bottom_row=bottom,
         row_candidates=rows,
         ocr_execution_seconds=metrics.ocr_execution_seconds,
-        ocr_status="recognized" if winner.is_valid else "unreadable",
+        ocr_status="ok" if winner.is_valid else "unreadable",
         correction_used=winner.correction_used,
         correction_count=winner.correction_count,
         ocr_calls=metrics.ocr_calls,

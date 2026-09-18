@@ -22,6 +22,16 @@ export const recognizeImage = (file) => {
     .post('/api/ai/recognize-image', formData, { timeout: 120000 })
     .then(({ data }) => data)
 }
+export const recognizeFrame = (blob, options = {}) => {
+  const formData = new FormData()
+  formData.append('file', blob, 'camera-frame.jpg')
+  return api
+    .post('/api/ai/recognize-frame', formData, {
+      timeout: 30000,
+      signal: options.signal,
+    })
+    .then(({ data }) => data)
+}
 
 export function errorMessage(error) {
   return error.response?.data?.detail || error.message || 'Something went wrong.'

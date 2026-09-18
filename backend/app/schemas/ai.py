@@ -18,12 +18,21 @@ class RecognitionDetection(BaseModel):
     ocr_confidence: float = Field(ge=0, le=1)
     preprocessing_variant: str
     is_valid: bool
-    ocr_status: str = "recognized"
+    ocr_status: str = "ok"
 
 
 class RecognitionResponse(BaseModel):
     recognized: bool
     image_path: str
+    image_width: int
+    image_height: int
+    detections: list[RecognitionDetection]
+    best_index: int | None
+    message: str | None = None
+
+
+class FrameRecognitionResponse(BaseModel):
+    recognized: bool
     image_width: int
     image_height: int
     detections: list[RecognitionDetection]
