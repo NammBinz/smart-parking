@@ -227,7 +227,7 @@ def test_multiple_padding_and_two_line_split_candidates(monkeypatch, tmp_path, c
         return OCRResult(raw_text="292160344", confidence=0.95)
 
     monkeypatch.setattr(pipeline_module, "run_ocr", mocked_ocr)
-    analysis = analyze_license_plates(image, 0.25)[0]
+    analysis = analyze_license_plates(image, 0.25, engine="easyocr")[0]
     assert analysis.debug_images == {}
     identities = {candidate.preprocessing_variant for candidate in analysis.candidates}
     assert identities == {
@@ -254,6 +254,7 @@ def test_multiple_padding_and_two_line_split_candidates(monkeypatch, tmp_path, c
         progress_callback=lambda current, total, label, elapsed: progress.append(
             (current, total, label, elapsed)
         ),
+        engine="easyocr",
     )[0]
     assert len(exhaustive.candidates) == 43
     assert progress[-1][0:2] == (63, 63)
@@ -477,7 +478,7 @@ def test_small_detections_skip_easyocr(monkeypatch):
         raise AssertionError("EasyOCR must not run for a detection below the quality threshold")
 
     monkeypatch.setattr(pipeline_module, "run_ocr", unexpected_ocr)
-    analyses = analyze_license_plates(image, 0.25)
+    analyses = analyze_license_plates(image, 0.25, engine="easyocr")
     assert len(analyses) == 2
     assert all(analysis.ocr_status == "too_small" for analysis in analyses)
     assert all(analysis.ocr_calls == 0 for analysis in analyses)

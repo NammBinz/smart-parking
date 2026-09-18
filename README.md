@@ -1,13 +1,13 @@
 # Smart Parking Management System
 
-A university web application for parking-space management, vehicle check-in, billed checkout, payments, reporting, uploaded-image recognition, and **Phase 3.5 stabilized live-camera license plate recognition**. All Phase 1 manual workflows and Phase 2 image recognition remain available.
+A university web application for parking-space management, vehicle check-in, billed checkout, payments, reporting, uploaded-image recognition, and **Phase 3.6 Paddle-primary license plate recognition**. All Phase 1 manual workflows and the stabilized live-camera workflow remain available.
 
 ## Technology stack
 
 - Frontend: React, Vite, Axios, Bootstrap, Recharts
 - Backend: Python, FastAPI, SQLAlchemy, Pydantic, Uvicorn
 - Database: SQLite (`backend/data/parking.db`)
-- Image recognition: YOLO11, OpenCV headless, EasyOCR
+- Image recognition: YOLO11, OpenCV headless, PaddleOCR primary, conditional EasyOCR fallback
 
 The supplied YOLO weights are stored at `backend/models/best.pt`. Do not rename, replace, or retrain this file.
 
@@ -58,7 +58,7 @@ uvicorn app.main:app --reload
 - Health check: <http://127.0.0.1:8000/health>
 - AI status: <http://127.0.0.1:8000/api/ai/status>
 
-The first real OCR request may download EasyOCR model weights. CUDA is optional; the recognition pipeline works on CPU.
+The first real OCR request may download PaddleOCR and EasyOCR model weights. CUDA is optional; the recognition pipeline works on CPU. On Windows, the application deliberately initializes PyTorch/YOLO before lazily importing PaddleOCR to avoid native DLL load-order conflicts.
 
 Tables are created without dropping existing data. Missing default settings and missing codes among A1–A10 and B1–B10 are seeded idempotently.
 
@@ -125,7 +125,7 @@ npm test
 ## Phase 2 features
 
 - All Phase 1 manual check-in, checkout, reporting, settings, and slot features
-- Lazy, process-wide YOLO and EasyOCR instances
+- Lazy, process-wide YOLO, PaddleOCR, and EasyOCR instances
 - Detection from both trained model classes without a class filter
 - Five-percent padded plate crops
 - Upscaled color, grayscale, CLAHE, and adaptive-threshold OCR variants
@@ -161,18 +161,30 @@ When a plate becomes stable, scanning pauses:
 
 Neither workflow mutates parking state automatically. Stable plates remain editable, and manual correction removes the OCR-confidence association from the edited text. After a successful workflow, scanning resumes after a short cooldown so the same vehicle does not trigger repeatedly.
 
-## Phase 3.5 accuracy evaluation
+## Phase 3.6 Paddle-primary recognition and evaluation
 
-The normal OCR pipeline remains bounded to at most six EasyOCR calls per detected plate. If ordinary candidates are weak, one conservative four-corner perspective rectification may replace a fallback attempt; unsafe or ambiguous geometry returns the original crop unchanged. The supplied YOLO weights are unchanged and no training is performed.
+Production recognition now runs YOLO first, takes a tight 4% padded crop, and invokes PaddleOCR on CPU with oneDNN disabled. A wider 10% Paddle crop is tried only when the tight crop is empty or invalid. Paddle fragments are ranked generically by plate structure, confidence, plausible length, alphanumeric composition, and position; unrelated branding is not removed with hard-coded words. Existing top-row/bottom-row fusion remains available for two-line plates.
 
-Run the reproducible labeled-image benchmark from `backend/`:
+EasyOCR runs only when Paddle is suspicious: empty or invalid output, implausible length, weak structural/layout score, detected noise fragments, or genuinely weak confidence. If both engines run, agreement is treated as strong evidence; disagreement is ranked by validity, layout and structural plausibility, row evidence, correction penalty, then confidence. The system never invents a missing letter, and the editable operator confirmation remains the final safeguard.
 
-```powershell
-python scripts/benchmark_recognition.py
-python scripts/benchmark_recognition.py --output-json benchmark/results.json
+The defaults are equivalent to:
+
+```text
+PRIMARY_OCR_ENGINE=paddleocr
+ENABLE_SECONDARY_OCR=true
 ```
 
-Ground truth is in `backend/benchmark/ground_truth.csv` and contains only manually known plates from the repository images. The report separates detector success from exact OCR accuracy and includes edit distance, character accuracy, error category, YOLO time, quality-gate time, OCR time, and total recognition time. After model warm-up on the current CPU environment, the Phase 3.5 baseline is 4/4 detected plates, 3/4 exact matches (75%), and 88.9% mean character accuracy; the remaining labeled plate is a missing-character OCR error.
+Run each reproducible benchmark mode in a separate process from `backend/`:
+
+```powershell
+python scripts/benchmark_recognition.py --engine easyocr --output-json benchmark/result_easyocr.json
+python scripts/benchmark_recognition.py --engine paddleocr --output-json benchmark/result_paddleocr.json
+python scripts/benchmark_recognition.py --engine production --output-json benchmark/result_production.json
+```
+
+Ground truth is in `backend/benchmark/ground_truth.csv`. The report separates detector and OCR success and includes edit distance, character accuracy, error category, fallback rate, Paddle-primary time, EasyOCR-fallback time, YOLO time, and end-to-end time. Paddle modes force the safe Windows startup order: PyTorch, Ultralytics/YOLO warm-up, then Paddle diagnostics and PaddleOCR initialization.
+
+On the current 35-image CPU benchmark, YOLO detected 35/35 plates. The measured baselines were EasyOCR 14/35 exact (40%, 88.53% mean character accuracy) and PaddleOCR 28/35 exact (80%, 91.47%). The Phase 3.6 production mode measured 31/35 exact (88.57%), 98.29% mean character accuracy, and 4/35 EasyOCR fallbacks (11.43%). Mean Paddle-primary OCR time was 0.584 seconds; mean EasyOCR time among fallback cases was 16.665 seconds; mean end-to-end recognition time was 2.558 seconds. These modes are intentionally run separately for fair timing.
 
 The CSV format is:
 
@@ -181,13 +193,6 @@ filename,plate
 image1.jpg,29Z158344
 ```
 
-PaddleOCR is an optional benchmark comparison and is not a production dependency or automatic dual-OCR path:
-
-```powershell
-pip install -r requirements-paddle.txt
-python scripts/benchmark_recognition.py --compare-paddle
-```
-
-The OCR adapter reads `PRIMARY_OCR_ENGINE` (default `easyocr`) and `ENABLE_SECONDARY_OCR` (default `false`) for explicitly integrated experiments, but the production API intentionally does not call the secondary fallback because no benchmark advantage has yet been established.
+The upload and selected-best-camera-frame endpoints both use this production path. YOLO-only camera sampling, quality scoring, the in-memory best-frame buffer, vehicle association, and conditional candidate retries are unchanged; sampled camera frames are never stored and OCR still does not run on every frame.
 
 Enable camera timing and quality diagnostics in the browser console with `VITE_CAMERA_DEBUG=true`. Debug logging contains numeric metrics and recognized candidates only; it does not save frames.

@@ -62,7 +62,10 @@ def model_names() -> dict[str, str]:
 
 def runtime_status() -> dict[str, object]:
     yolo_installed = dependency_available("ultralytics")
-    ocr_installed = dependency_available("easyocr")
+    paddle_installed = dependency_available("paddleocr") and dependency_available(
+        "paddle"
+    )
+    easyocr_installed = dependency_available("easyocr")
     available = MODEL_PATH.is_file() and yolo_installed
     names: dict[str, str] = {}
     if available:
@@ -71,5 +74,5 @@ def runtime_status() -> dict[str, object]:
         "model_available": available,
         "model_path": PUBLIC_MODEL_PATH,
         "model_names": names,
-        "ocr_available": ocr_installed,
+        "ocr_available": paddle_installed and easyocr_installed,
     }

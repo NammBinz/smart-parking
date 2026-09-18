@@ -37,6 +37,27 @@ def plate_structure_score(normalized_text: str) -> float:
     return min(1.0, score)
 
 
+def plate_layout_score(text: str) -> float:
+    """Softly score common Vietnamese plate layout without repairing characters."""
+    normalized = normalize_ocr_text(text)
+    if not normalized:
+        return 0.0
+    score = 0.0
+    if 7 <= len(normalized) <= 10:
+        score += 0.20
+    if len(normalized) >= 2 and normalized[:2].isdigit():
+        score += 0.25
+    if len(normalized) >= 3 and normalized[2].isalpha():
+        score += 0.30
+    if len(normalized) >= 4 and normalized[-4:].isdigit():
+        score += 0.15
+    letters = sum(character.isalpha() for character in normalized)
+    digits = sum(character.isdigit() for character in normalized)
+    if 1 <= letters <= 3 and digits >= 5:
+        score += 0.10
+    return min(1.0, score)
+
+
 def validate_plate_candidate(text: str) -> ValidationResult:
     normalized = normalize_ocr_text(text)
     letters = sum(character.isalpha() for character in normalized)

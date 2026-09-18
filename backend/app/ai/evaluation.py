@@ -71,6 +71,9 @@ class EvaluationRow:
     ocr_seconds: float = 0.0
     total_seconds: float = 0.0
     engine: str = "easyocr"
+    primary_ocr_seconds: float = 0.0
+    fallback_ocr_seconds: float = 0.0
+    fallback_used: bool = False
 
     def as_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -94,6 +97,9 @@ def make_evaluation_row(
     bbox: tuple[int, int, int, int] | None = None,
     raw_ocr: str = "",
     ocr_valid: bool = False,
+    primary_ocr_seconds: float = 0.0,
+    fallback_ocr_seconds: float = 0.0,
+    fallback_used: bool = False,
 ) -> EvaluationRow:
     distance = levenshtein_distance(expected, predicted)
     return EvaluationRow(
@@ -122,6 +128,9 @@ def make_evaluation_row(
         ocr_seconds=ocr_seconds,
         total_seconds=total_seconds,
         engine=engine,
+        primary_ocr_seconds=primary_ocr_seconds,
+        fallback_ocr_seconds=fallback_ocr_seconds,
+        fallback_used=fallback_used,
     )
 
 
@@ -136,6 +145,7 @@ def summarize_evaluations(rows: list[EvaluationRow]) -> dict[str, object]:
         if row.detected and not row.ocr_valid and row.ocr_status != "too_small"
     ]
     too_small = [row for row in rows if row.ocr_status == "too_small"]
+    fallbacks = [row for row in rows if row.fallback_used]
     return {
         "images": total,
         "detected": len(detected),
@@ -144,6 +154,8 @@ def summarize_evaluations(rows: list[EvaluationRow]) -> dict[str, object]:
         "valid_but_wrong": len(valid_wrong),
         "invalid_ocr": len(invalid),
         "too_small": len(too_small),
+        "fallback_count": len(fallbacks),
+        "fallback_rate": len(fallbacks) / total if total else 0.0,
         "exact_plate_accuracy": len(exact) / total if total else 0.0,
         "ocr_exact_match_rate_detected": len(exact) / len(detected) if detected else 0.0,
         "mean_character_accuracy": mean(row.character_accuracy for row in rows) if rows else 0.0,
@@ -152,6 +164,8 @@ def summarize_evaluations(rows: list[EvaluationRow]) -> dict[str, object]:
         "mean_yolo_seconds": mean(row.yolo_seconds for row in rows) if rows else 0.0,
         "mean_quality_seconds": mean(row.quality_seconds for row in rows) if rows else 0.0,
         "mean_ocr_seconds": mean(row.ocr_seconds for row in rows) if rows else 0.0,
+        "mean_primary_ocr_seconds": mean(row.primary_ocr_seconds for row in rows) if rows else 0.0,
+        "mean_fallback_ocr_seconds": mean(row.fallback_ocr_seconds for row in fallbacks) if fallbacks else 0.0,
         "mean_total_seconds": mean(row.total_seconds for row in rows) if rows else 0.0,
         "mean_inference_seconds": mean(row.total_seconds for row in rows) if rows else 0.0,
         "error_categories": dict(Counter(row.error_category for row in rows)),

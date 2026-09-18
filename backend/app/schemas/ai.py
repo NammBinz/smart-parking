@@ -19,6 +19,8 @@ class RecognitionDetection(BaseModel):
     preprocessing_variant: str
     is_valid: bool
     ocr_status: str = "ok"
+    ocr_engine: str = "easyocr"
+    fallback_used: bool = False
 
 
 class RecognitionResponse(BaseModel):

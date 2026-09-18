@@ -7,6 +7,12 @@ import numpy as np
 
 from app.ai.detector import Detection, detect_plates
 from app.ai.ocr import OCRFragment, OCRResult, combine_ocr_results, run_ocr
+from app.ai.ocr_engines import (
+    ENABLE_SECONDARY_OCR,
+    PRIMARY_OCR_ENGINE,
+    EngineResult,
+    recognize_with_paddleocr,
+)
 from app.ai.preprocess import (
     PreprocessingCache,
     crop_to_bbox,
@@ -17,7 +23,11 @@ from app.ai.preprocess import (
 )
 from app.ai.quality import assess_detection_quality
 from app.ai.rectification import rectify_plate_crop
-from app.ai.validator import normalize_ocr_text, validate_plate_candidate
+from app.ai.validator import (
+    normalize_ocr_text,
+    plate_layout_score,
+    validate_plate_candidate,
+)
 
 
 PADDING_OPTIONS = ((0.05, "padding05"), (0.10, "padding10"), (0.15, "padding15"))
@@ -62,6 +72,8 @@ class Candidate:
     evidence_score: float = 0.0
     correction_used: bool = False
     correction_count: int = 0
+    engine: str = "easyocr"
+    noise_detected: bool = False
 
 
 @dataclass(frozen=True)
@@ -122,6 +134,11 @@ class DetectionAnalysis:
     preprocessing_seconds: float = 0.0
     ranking_seconds: float = 0.0
     total_recognition_seconds: float = 0.0
+    primary_ocr_seconds: float = 0.0
+    fallback_ocr_seconds: float = 0.0
+    fallback_used: bool = False
+    fallback_reasons: tuple[str, ...] = ()
+    ocr_engine: str = "easyocr"
     debug_images: dict[str, np.ndarray] = field(default_factory=dict)
 
     @property
@@ -153,6 +170,8 @@ class DetectionAnalysis:
             "preprocessing_variant": self.winner.preprocessing_variant,
             "is_valid": self.winner.is_valid,
             "ocr_status": self.ocr_status,
+            "ocr_engine": self.ocr_engine,
+            "fallback_used": self.fallback_used,
         }
 
 
@@ -195,6 +214,37 @@ def _candidate_from_result(
         padding_ratio=padding_ratio,
         fragments=result.fragments,
         execution_seconds=execution_seconds,
+    )
+
+
+def _candidate_from_engine_result(
+    result: EngineResult,
+    identity: str,
+    padding_ratio: float,
+    execution_seconds: float,
+) -> Candidate:
+    return Candidate(
+        raw_text=result.raw_text,
+        normalized_text=result.normalized_text,
+        ocr_confidence=result.confidence,
+        preprocessing_variant=identity,
+        is_valid=result.is_valid,
+        structure_score=result.structure_score,
+        strategy="paddle_primary",
+        padding_ratio=padding_ratio,
+        fragments=tuple(
+            OCRFragment(
+                text=fragment.text,
+                confidence=fragment.confidence,
+                bbox=fragment.bbox,
+                center=fragment.center,
+                source_region="full",
+            )
+            for fragment in result.fragments
+        ),
+        execution_seconds=execution_seconds,
+        engine="paddleocr",
+        noise_detected=result.noise_detected,
     )
 
 
@@ -558,6 +608,56 @@ def _timed_ocr(
     metrics.decoders.append(decoder)
     tracker.update(label)
     return result, elapsed
+
+
+def _timed_paddle_ocr(
+    image: np.ndarray,
+    label: str,
+    tracker: _ProgressTracker,
+    metrics: _TimingMetrics,
+) -> tuple[EngineResult, float]:
+    started = perf_counter()
+    result = recognize_with_paddleocr(image)
+    elapsed = perf_counter() - started
+    metrics.ocr_execution_seconds += elapsed
+    metrics.ocr_calls += 1
+    metrics.decoders.append("paddleocr")
+    tracker.update(label)
+    return result, elapsed
+
+
+def paddle_fallback_reasons(candidate: Candidate) -> tuple[str, ...]:
+    reasons = []
+    text = candidate.normalized_text
+    if not text:
+        reasons.append("empty")
+    if text and not candidate.is_valid:
+        reasons.append("invalid")
+    if text and not 7 <= len(text) <= 10:
+        reasons.append("implausible_length")
+    if text and candidate.structure_score < 0.85:
+        reasons.append("weak_structure")
+    if text and plate_layout_score(text) < 0.80:
+        reasons.append("suspicious_layout")
+    if candidate.noise_detected:
+        reasons.append("noise_fragments")
+    if text and candidate.ocr_confidence < 0.55:
+        reasons.append("weak_confidence")
+    return tuple(dict.fromkeys(reasons))
+
+
+def _merge_metrics(primary: _TimingMetrics, secondary: _TimingMetrics) -> _TimingMetrics:
+    return _TimingMetrics(
+        preprocessing_seconds=(
+            primary.preprocessing_seconds + secondary.preprocessing_seconds
+        ),
+        ocr_execution_seconds=(
+            primary.ocr_execution_seconds + secondary.ocr_execution_seconds
+        ),
+        ranking_seconds=primary.ranking_seconds + secondary.ranking_seconds,
+        ocr_calls=primary.ocr_calls + secondary.ocr_calls,
+        decoders=primary.decoders + secondary.decoders,
+    )
 
 
 def _fused_candidate(
@@ -978,12 +1078,117 @@ def _analyze_exhaustive(
     return candidates, rows, metrics, debug_images
 
 
+def _analyze_paddle_primary(
+    image: np.ndarray,
+    detection: Detection,
+    likely_two_line: bool,
+    tracker: _ProgressTracker,
+) -> tuple[list[Candidate], list[RowCandidate], _TimingMetrics]:
+    metrics = _TimingMetrics()
+    candidates: list[Candidate] = []
+    rows: list[RowCandidate] = []
+
+    for padding_ratio, padding_label in ((0.04, "padding04"), (0.10, "padding10")):
+        preprocessing_started = perf_counter()
+        crop = crop_with_padding(image, detection.bbox, padding_ratio)
+        metrics.preprocessing_seconds += perf_counter() - preprocessing_started
+        identity = f"{padding_label}_paddleocr"
+        result, elapsed = _timed_paddle_ocr(crop, identity, tracker, metrics)
+        candidate = _candidate_from_engine_result(
+            result, identity, padding_ratio, elapsed
+        )
+        candidates.append(candidate)
+        if likely_two_line:
+            rows.extend(
+                _row_candidates_from_full_result(
+                    OCRResult(
+                        raw_text=result.raw_text,
+                        confidence=result.confidence,
+                        fragments=candidate.fragments,
+                    ),
+                    crop.shape[0],
+                    identity,
+                    "paddleocr",
+                    padding_label,
+                )
+            )
+
+        # Wider context is a bounded Paddle fallback only when the tight crop
+        # did not produce a structurally usable plate.
+        if padding_ratio == 0.04 and not paddle_fallback_reasons(candidate):
+            break
+        if padding_ratio == 0.04 and candidate.normalized_text and candidate.is_valid:
+            break
+
+    return candidates, rows, metrics
+
+
+def _production_candidate_key(candidate: Candidate) -> tuple[bool, float, float, float, float]:
+    return (
+        candidate.is_valid,
+        plate_layout_score(candidate.normalized_text),
+        candidate.structure_score,
+        candidate.evidence_score - (0.08 * candidate.correction_count),
+        candidate.ocr_confidence,
+    )
+
+
+def _select_production_winner(candidates: list[Candidate]) -> Candidate:
+    usable = [candidate for candidate in candidates if candidate.normalized_text]
+    if not usable:
+        return _empty_candidate()
+
+    paddle_texts = {
+        candidate.normalized_text
+        for candidate in usable
+        if candidate.engine == "paddleocr"
+    }
+    easy_texts = {
+        candidate.normalized_text
+        for candidate in usable
+        if candidate.engine == "easyocr"
+    }
+    agreements = paddle_texts & easy_texts
+    if agreements:
+        agreed_text = max(
+            agreements,
+            key=lambda text: max(
+                _production_candidate_key(candidate)
+                for candidate in usable
+                if candidate.normalized_text == text
+            ),
+        )
+        representative = max(
+            (
+                candidate
+                for candidate in usable
+                if candidate.normalized_text == agreed_text
+            ),
+            key=_production_candidate_key,
+        )
+        return replace(
+            representative,
+            preprocessing_variant="paddle_easy_agreement",
+            strategy="engine_agreement",
+            evidence_score=max(1.0, representative.evidence_score),
+            engine="paddleocr+easyocr",
+        )
+    return max(usable, key=_production_candidate_key)
+
+
+def _configured_recognition_engine() -> str:
+    if PRIMARY_OCR_ENGINE == "paddleocr" and ENABLE_SECONDARY_OCR:
+        return "production"
+    return PRIMARY_OCR_ENGINE
+
+
 def _analyze_detection(
     image: np.ndarray,
     detection: Detection,
     exhaustive: bool,
     capture_images: bool,
     tracker: _ProgressTracker,
+    recognition_engine: str,
 ) -> DetectionAnalysis:
     analysis_started = perf_counter()
     quality_started = perf_counter()
@@ -1001,6 +1206,7 @@ def _analyze_detection(
             row_candidates=[],
             ocr_execution_seconds=0.0,
             ocr_status=quality.status,
+            ocr_engine=recognition_engine,
             quality_gate_seconds=quality_elapsed,
             total_recognition_seconds=perf_counter() - analysis_started,
             debug_images={"crop": crop_to_bbox(image, detection.bbox)} if capture_images else {},
@@ -1010,17 +1216,57 @@ def _analyze_detection(
     height, width = raw_crop.shape[:2]
     likely_two_line = width > 0 and (height / width) >= 0.65
 
+    fallback_used = False
+    fallback_reasons: tuple[str, ...] = ()
+    primary_ocr_seconds = 0.0
+    fallback_ocr_seconds = 0.0
+
     if exhaustive:
         candidates, rows, metrics, debug_images = _analyze_exhaustive(
             image, detection, likely_two_line, tracker, capture_images
         )
-    elif likely_two_line:
+        primary_ocr_seconds = metrics.ocr_execution_seconds
+        active_engine = "easyocr"
+    elif recognition_engine == "easyocr" and likely_two_line:
         candidates, rows, metrics = _analyze_two_line_normal(image, detection, tracker)
         debug_images = {}
-    else:
+        primary_ocr_seconds = metrics.ocr_execution_seconds
+        active_engine = "easyocr"
+    elif recognition_engine == "easyocr":
         candidates, metrics = _analyze_standard_normal(image, detection, tracker)
         rows = []
         debug_images = {}
+        primary_ocr_seconds = metrics.ocr_execution_seconds
+        active_engine = "easyocr"
+    else:
+        candidates, rows, metrics = _analyze_paddle_primary(
+            image, detection, likely_two_line, tracker
+        )
+        primary_ocr_seconds = metrics.ocr_execution_seconds
+        debug_images = {}
+        active_engine = "paddleocr"
+        best_paddle = select_best_candidate(candidates)
+        fallback_reasons = paddle_fallback_reasons(best_paddle)
+        fallback_used = bool(
+            recognition_engine == "production"
+            and ENABLE_SECONDARY_OCR
+            and fallback_reasons
+        )
+        if fallback_used:
+            if likely_two_line:
+                easy_candidates, easy_rows, easy_metrics = _analyze_two_line_normal(
+                    image, detection, tracker
+                )
+            else:
+                easy_candidates, easy_metrics = _analyze_standard_normal(
+                    image, detection, tracker
+                )
+                easy_rows = []
+            candidates.extend(easy_candidates)
+            rows.extend(easy_rows)
+            fallback_ocr_seconds = easy_metrics.ocr_execution_seconds
+            metrics = _merge_metrics(metrics, easy_metrics)
+            active_engine = "production"
 
     ranking_started = perf_counter()
     best_complete = select_best_candidate(candidates)
@@ -1029,8 +1275,14 @@ def _analyze_detection(
     else:
         top = bottom = fusion = None
     if fusion:
+        row_sources = set((top.sources if top else ()) + (bottom.sources if bottom else ()))
+        if row_sources and all("paddle" in source for source in row_sources):
+            fusion = replace(fusion, engine="paddleocr")
         candidates.append(fusion)
-    winner = _choose_two_line_winner(best_complete, fusion) if likely_two_line else best_complete
+    if recognition_engine == "production" and fallback_used:
+        winner = _select_production_winner(candidates)
+    else:
+        winner = _choose_two_line_winner(best_complete, fusion) if likely_two_line else best_complete
     metrics.ranking_seconds += perf_counter() - ranking_started
     return DetectionAnalysis(
         detection=detection,
@@ -1051,6 +1303,11 @@ def _analyze_detection(
         preprocessing_seconds=metrics.preprocessing_seconds,
         ranking_seconds=metrics.ranking_seconds,
         total_recognition_seconds=perf_counter() - analysis_started,
+        primary_ocr_seconds=primary_ocr_seconds,
+        fallback_ocr_seconds=fallback_ocr_seconds,
+        fallback_used=fallback_used,
+        fallback_reasons=fallback_reasons,
+        ocr_engine=winner.engine if winner.normalized_text else active_engine,
         debug_images=debug_images,
     )
 
@@ -1071,8 +1328,12 @@ def analyze_license_plates(
     exhaustive: bool = False,
     capture_images: bool = False,
     progress_callback: ProgressCallback | None = None,
+    engine: str | None = None,
 ) -> list[DetectionAnalysis]:
     recognition_started = perf_counter()
+    recognition_engine = (engine or _configured_recognition_engine()).lower()
+    if recognition_engine not in {"easyocr", "paddleocr", "production"}:
+        raise ValueError(f"Unsupported OCR engine: {recognition_engine}")
     yolo_started = perf_counter()
     detections = detect_plates(image, confidence_threshold)
     yolo_elapsed = perf_counter() - yolo_started
@@ -1088,7 +1349,14 @@ def analyze_license_plates(
         total = 0
     tracker = _ProgressTracker(total=total, callback=progress_callback)
     analyses = [
-        _analyze_detection(image, detection, exhaustive, capture_images, tracker)
+        _analyze_detection(
+            image,
+            detection,
+            exhaustive,
+            capture_images,
+            tracker,
+            recognition_engine,
+        )
         for detection in detections
     ]
     analyses.sort(key=_analysis_ranking_key, reverse=True)

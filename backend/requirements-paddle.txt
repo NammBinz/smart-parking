@@ -1,3 +1,3 @@
-# Optional benchmark-only OCR comparison. Production does not require this file.
+# Paddle-primary production OCR dependencies. Kept separate for explicit CPU setup.
 paddleocr>=2.8,<4
 paddlepaddle>=2.6,<4
